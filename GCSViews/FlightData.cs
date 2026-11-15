@@ -794,6 +794,10 @@ namespace MissionPlanner.GCSViews
 
             loadTabControlActions();
 
+            tabStatus.Text = "Telemetry";
+            if (!tabControlactions.TabPages.Contains(tabStatus))
+                tabControlactions.TabPages.Add(tabStatus);
+
             //we want to at least have one tabpage
             if (tabControlactions.TabPages.Count == 0 && !tabQuickDetached)
             {
@@ -6190,46 +6194,41 @@ namespace MissionPlanner.GCSViews
 
         private void tabStatus_Paint(object sender, PaintEventArgs e)
         {
-            var bmp = new Bitmap(tabStatus.DisplayRectangle.Width, tabStatus.DisplayRectangle.Height);
-            var g = Graphics.FromImage(bmp);
-            g.Clear(Color.Transparent);
-
-            int x = 10;
-            int y = 10;
-
-            var list = MainV2.comPort.MAV.cs.GetItemList(true);
+            const int rowHeight = 23;
+            const int nameWidth = 170;
+            var vehicle = MainV2.comPort.MAV;
             var cs = bindingSourceStatusTab.Current as CurrentState;
-            var br = new SolidBrush(tabStatus.ForeColor);
+            bool fresh = cs != null && ReferenceEquals(cs, vehicle.cs) &&
+                MainV2.comPort.BaseStream.IsOpen &&
+                (DateTime.UtcNow - vehicle.lastvalidpacket).TotalSeconds <= 5;
+            var fields = vehicle.cs.GetItemList(true);
+            int width = Math.Max(220, tabStatus.ClientSize.Width - SystemInformation.VerticalScrollBarWidth);
+            int offset = tabStatus.AutoScrollPosition.Y;
+            int y = offset + 8;
 
-            foreach (var field in list)
+            var flags = TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter;
+            TextRenderer.DrawText(e.Graphics, fresh ? "Aircraft telemetry" : "Telemetry unavailable",
+                Font, new Rectangle(8, y, width - 16, rowHeight), tabStatus.ForeColor, flags);
+            y += rowHeight;
+
+            foreach (var field in fields)
             {
-                g.DrawString(field, this.Font, br, new RectangleF(x, y, 120, 15));
-
-                if (cs != null)
-                    g.DrawString(typeof(CurrentState).GetProperty(field).GetValue(cs)?.ToString(), this.Font,
-                        br, new RectangleF(x + 120, y, 50, 15));
-
-                x += 0;
-                y += 15;
-
-                if (y > tabStatus.Height - 30)
+                if (y >= -rowHeight && y < tabStatus.ClientSize.Height)
                 {
-                    x += 190;
-                    y = 10;
+                    var property = typeof(CurrentState).GetProperty(field);
+                    var value = fresh ? property?.GetValue(cs) : null;
+                    var reading = Convert.ToString(value, CultureInfo.CurrentCulture);
+                    TextRenderer.DrawText(e.Graphics, field, Font,
+                        new Rectangle(8, y, nameWidth - 12, rowHeight), tabStatus.ForeColor, flags);
+                    TextRenderer.DrawText(e.Graphics, string.IsNullOrWhiteSpace(reading) ? "—" : reading, Font,
+                        new Rectangle(nameWidth, y, width - nameWidth - 8, rowHeight), tabStatus.ForeColor, flags);
                 }
+                y += rowHeight;
             }
 
-            if (tabStatus.AutoScrollMinSize.Width < x)
-            {
-                typeof(Panel).InvokeMember("DoubleBuffered", BindingFlags.SetProperty
-                                                             | BindingFlags.Instance | BindingFlags.NonPublic, null,
-                    tabStatus, new object[] { true });
-
-                tabStatus.AutoScrollMinSize = new Size(x + 164, 0);
-            }
-            e.Graphics.TranslateTransform(tabStatus.AutoScrollPosition.X,
-                tabStatus.AutoScrollPosition.Y);
-            e.Graphics.DrawImageUnscaled(bmp, 0, 0);
+            var scrollSize = new Size(0, y - offset + 8);
+            if (tabStatus.AutoScrollMinSize != scrollSize)
+                tabStatus.AutoScrollMinSize = scrollSize;
         }
 
         private void gMapControl1_MouseUp(object sender, MouseEventArgs e)

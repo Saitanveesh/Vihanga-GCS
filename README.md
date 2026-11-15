@@ -70,7 +70,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-VihangaG
 
 In the GCS choose **Connections → Cloud telemetry**, then sign in with the separate Vihanga relay operator credentials. Do not paste passwords, device tokens or private configuration files into issues.
 
-Use native **Flight Data** and **Plan** for the map and waypoints. Open **Operations** for flight records, aircraft status, fleet, and cameras. To create a survey or corridor draft, right-click the Plan map or choose **Tools → Survey and corridor planning**. **Tools → Mission Planner maintenance** restores the native servicing buttons available in your profile.
+Use native **Flight Data** and **Plan** for the map and waypoints. Open **Operations** for flight records, aircraft status and fleet. Use the native Plan map for survey planning. Open cameras from the **Camera** toolbar button. **Tools → Mission Planner maintenance** restores the native servicing buttons available in your profile.
 
 ## Set up the Pi and Oracle relay
 

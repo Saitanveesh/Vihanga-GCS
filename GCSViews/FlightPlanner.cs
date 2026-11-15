@@ -63,6 +63,82 @@ namespace MissionPlanner.GCSViews
         {
             InitializeComponent();
             Init();
+            contextMenuStrip1.Items.Add("Compare route drafts…", null, CompareRouteDrafts);
+            contextMenuStrip1.Items.Add("Clear route comparison", null, (sender, args) => ClearRouteComparison());
+        }
+
+        private GMapOverlay routeComparison;
+
+        private void ClearRouteComparison()
+        {
+            if (routeComparison == null)
+                return;
+
+            MainMap.Overlays.Remove(routeComparison);
+            foreach (var route in routeComparison.Routes)
+                route.Stroke.Dispose();
+            routeComparison.Dispose();
+            routeComparison = null;
+            MainMap.Invalidate();
+        }
+
+        private void CompareRouteDrafts(object sender, EventArgs args)
+        {
+            using (var picker = new OpenFileDialog {
+                Title = "Compare route drafts",
+                Filter = "Waypoint files (*.waypoints;*.txt)|*.waypoints;*.txt",
+                Multiselect = true
+            })
+            {
+                if (picker.ShowDialog(this) != DialogResult.OK)
+                    return;
+                if (picker.FileNames.Length < 2 || picker.FileNames.Length > 6)
+                {
+                    CustomMessageBox.Show("Select two to six saved waypoint files.");
+                    return;
+                }
+
+                var drafts = new List<KeyValuePair<string, List<PointLatLng>>>();
+                foreach (var file in picker.FileNames.OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var points = WaypointFile.ReadWaypointFile(file).Skip(1)
+                            .Where(item => item.id == (ushort) MAVLink.MAV_CMD.WAYPOINT)
+                            .Select(item => new PointLatLng(item.lat, item.lng))
+                            .ToList();
+                        if (points.Count < 2 || points.Any(point =>
+                            !(Math.Abs(point.Lat) <= 90 && Math.Abs(point.Lng) <= 180)))
+                        {
+                            CustomMessageBox.Show(Path.GetFileName(file) + " needs at least two valid waypoints.");
+                            return;
+                        }
+                        drafts.Add(new KeyValuePair<string, List<PointLatLng>>(Path.GetFileName(file), points));
+                    }
+                    catch (Exception error)
+                    {
+                        CustomMessageBox.Show("Could not read " + Path.GetFileName(file) + ". " + error.Message);
+                        return;
+                    }
+                }
+
+                ClearRouteComparison();
+                var palette = new[] { Color.DeepSkyBlue, Color.Orange, Color.SpringGreen,
+                    Color.HotPink, Color.Gold, Color.MediumPurple };
+                routeComparison = new GMapOverlay("Vihanga route comparison");
+                var legend = new List<string>();
+                for (int index = 0; index < drafts.Count; index++)
+                {
+                    var draft = drafts[index];
+                    routeComparison.Routes.Add(new GMapRoute(draft.Value, draft.Key) {
+                        Stroke = new Pen(palette[index], 3)
+                    });
+                    legend.Add(palette[index].Name + "  " + draft.Key + "  (" + draft.Value.Count + " waypoints)");
+                }
+                MainMap.Overlays.Add(routeComparison);
+                MainMap.Invalidate();
+                CustomMessageBox.Show(string.Join(Environment.NewLine, legend), "Route comparison");
+            }
         }
 
 

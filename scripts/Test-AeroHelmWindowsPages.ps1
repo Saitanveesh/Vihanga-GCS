@@ -157,8 +157,8 @@ Require-Text $cloud 'NewToolbarButton("Connections"' 'Connection selector missin
 foreach ($menu in @('Operations','Tools')) {
     Require-Text $cloud ('NewToolbarMenu("'+$menu+'"') "Operator menu missing: $menu"
 }
-foreach ($item in @('Flight records and status','Fleet','Cameras','Link diagnostics',
-    'Attitude monitor','Survey and corridor planning','Vihanga settings','Operations tools',
+foreach ($item in @('Flight records and status','Fleet','Link diagnostics',
+    'Attitude monitor','Vihanga settings','Operations tools',
     'Fleet diagnostics')) {
     Require-Text $cloud ('DropDownItems.Add("'+$item+'"') "Consolidated entry missing: $item"
 }
@@ -171,7 +171,8 @@ foreach ($obsolete in @('new ToolStripButton("CLOUD")',
 }
 Require-Text $cloud 'new VihangaSettingsWindow()' 'Settings must remain accessible through Tools.'
 Require-Text $cloud 'menu.Items.IndexOf(main.MenuFlightPlanner)' 'Operator controls must follow native Plan.'
-Require-Text $cloud 'Host.FPMenuMap.Items.Add(_planSurvey)' 'Survey and corridor planning must be accessible from the native Plan map.'
+Require-Text $cloud 'NewToolbarButton("Camera"' 'Camera must be available on the toolbar.'
+if ($cloud.Contains('new AeroHelmSurveyWindow()')) { throw 'Survey must use native Plan.' }
 Require-Text $cloud 'VIHANGA_ADVANCED_TOOLS' 'Experimental tools must be hidden unless maintenance profile is explicit.'
 Require-Text $cloud 'new AeroHelmOpsWindow(true)' 'Advanced Operations tools must remain accessible.'
 Require-Text $cloud 'new AeroHelmReadOnlyPage("FLEET")' 'Operations must open the fleet table.'
