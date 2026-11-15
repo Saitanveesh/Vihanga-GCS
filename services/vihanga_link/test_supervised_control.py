@@ -126,10 +126,44 @@ def test_expired_receipt_rejects_late_ack_and_cannot_mutate_parameters():
 def test_no_hardware_path_and_no_arbitrary_mavlink():
     c, _ = control()
     assert c.ACTIONS == frozenset({
-        "PARAM_WRITE_SIM", "MISSION_UPLOAD_SIM", "MISSION_START_SIM"})
+        "PARAM_READ_SIM", "PARAM_WRITE_SIM", "MISSION_READ_SIM",
+        "MISSION_UPLOAD_SIM", "MISSION_START_SIM"})
     l = c.acquire("AH-HW-001", 1, "pilot", "reviewer", PLAN)
     with pytest.raises(AuthorityRejected):
         c.submit(vehicle_id="AH-HW-001", lease_token=l["lease_token"],
                  request_id="7" * 32, sequence=1, action="ARM",
                  payload={"mavlink": "COMMAND_LONG"},
                  plan_digest=PLAN, evidence=evidence())
+
+
+@pytest.mark.parametrize("write,read,write_payload,read_payload,result", [
+    ("PARAM_WRITE_SIM", "PARAM_READ_SIM",
+     {"name": "SIM_PARAM", "value": 5}, {"name": "SIM_PARAM"},
+     {"name": "SIM_PARAM", "value": 5}),
+    ("MISSION_UPLOAD_SIM", "MISSION_READ_SIM",
+     {"revision_sha256": PLAN}, {}, {"revision_sha256": PLAN}),
+])
+def test_simulator_round_trip_and_aircraft_isolation(write, read, write_payload,
+                                                    read_payload, result):
+    c, _ = control()
+    for vehicle, system in (("AH-SIM-001", 1), ("AH-SIM-002", 2)):
+        lease = c.acquire(vehicle, system, "pilot", "reviewer", PLAN)
+        sample = evidence(vehicle_id=vehicle, system_id=system)
+        operations = [(write, write_payload), (read, read_payload)] if system == 1 else [
+            (read, read_payload)
+        ]
+        for sequence, (action, payload) in enumerate(operations, start=1):
+            request = f"{system}{sequence}".ljust(32, "0")
+            response = c.submit(vehicle_id=vehicle, lease_token=lease["lease_token"],
+                                request_id=request, sequence=sequence, action=action,
+                                payload=payload, plan_digest=PLAN, evidence=sample)
+            assert "result" not in response
+            assert "result" not in c.observe_pi_ack(request, True)
+            receipt = c.observe_fc_result(request, True, sample)
+            if action == read:
+                expected = result if system == 1 else {
+                    key: value if key == "name" else None for key, value in result.items()
+                }
+                assert receipt["result"] == expected
+                receipt["result"].clear()
+                assert c.status(request)["result"] == expected
