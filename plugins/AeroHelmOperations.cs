@@ -110,6 +110,94 @@ namespace AeroHelm.GcsCloud
         private bool busy;
         private bool renewing;
 
+        private static TabPage CreateFlightChecklist()
+        {
+            var page = new TabPage("Flight checklist");
+            var layout = new FlowLayoutPanel {
+                Dock = DockStyle.Fill, Padding = new Padding(12), AutoScroll = true,
+                FlowDirection = FlowDirection.TopDown, WrapContents = false
+            };
+            page.Controls.Add(layout);
+
+            layout.Controls.Add(new Label { Text = "Aircraft or mission reference", AutoSize = true });
+            var reference = new TextBox { Width = 460, MaxLength = 120 };
+            layout.Controls.Add(reference);
+
+            var checks = new Dictionary<string, CheckedListBox>();
+            AddChecklist(layout, checks, "Pre-flight", new[] {
+                "Aircraft and payload inspected",
+                "Battery condition and charge checked",
+                "Mission area, route and weather reviewed",
+                "Pilot control link and backup checked",
+                "Navigation status and home position confirmed",
+                "Recovery procedure reviewed with the crew"
+            });
+            AddChecklist(layout, checks, "Post-flight", new[] {
+                "Aircraft disarmed and secured",
+                "Aircraft and payload inspected",
+                "Battery condition recorded",
+                "Flight logs and issues recorded"
+            });
+
+            var save = new Button { Text = "Save checklist report", AutoSize = true };
+            layout.Controls.Add(save);
+            save.Click += (sender, args) => {
+                if (string.IsNullOrWhiteSpace(reference.Text))
+                {
+                    MessageBox.Show(page, "Enter an aircraft or mission reference.");
+                    reference.Focus();
+                    return;
+                }
+
+                using (var dialog = new SaveFileDialog {
+                    Filter = "Text report (*.txt)|*.txt",
+                    FileName = "Vihanga-flight-checklist.txt",
+                    DefaultExt = "txt", AddExtension = true, OverwritePrompt = true
+                })
+                {
+                    if (dialog.ShowDialog(page) != DialogResult.OK)
+                        return;
+
+                    var report = new StringBuilder();
+                    report.AppendLine("Vihanga flight checklist");
+                    report.AppendLine("Reference: " + reference.Text.Trim());
+                    report.AppendLine("Recorded UTC: " + DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+                    foreach (var section in new[] { "Pre-flight", "Post-flight" })
+                    {
+                        var list = checks[section];
+                        report.AppendLine();
+                        report.AppendLine(section);
+                        for (var index = 0; index < list.Items.Count; index++)
+                        {
+                            var result = list.GetItemChecked(index) ? "Confirmed" : "Pending";
+                            report.AppendLine(result + " - " + list.Items[index]);
+                        }
+                    }
+
+                    try
+                    {
+                        File.WriteAllText(dialog.FileName, report.ToString(), Encoding.UTF8);
+                    }
+                    catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
+                    {
+                        MessageBox.Show(page, "Could not save the report. " + error.Message);
+                    }
+                }
+            };
+            return page;
+        }
+
+        private static void AddChecklist(FlowLayoutPanel layout,
+            Dictionary<string, CheckedListBox> checks, string title, string[] entries)
+        {
+            layout.Controls.Add(new Label { Text = title, AutoSize = true });
+            var list = new CheckedListBox { Width = 460, CheckOnClick = true };
+            list.Items.AddRange(entries);
+            list.Height = list.ItemHeight * entries.Length + SystemInformation.BorderSize.Height * 2 + 2;
+            checks.Add(title, list);
+            layout.Controls.Add(list);
+        }
+
         public AeroHelmOpsWindow()
         {
             Text="VIHANGA — Operations | Simulator and Bench Maintenance";
@@ -120,6 +208,7 @@ namespace AeroHelm.GcsCloud
             var simulation=new TabPage("AUTONOMY — SIMULATION ONLY");
             var maintenance=new TabPage("MAINTENANCE — PHYSICAL APPROVAL");
             var policy=new TabPage("CAPABILITIES — READ ONLY");
+            tabs.TabPages.Add(CreateFlightChecklist());
             tabs.TabPages.Add(simulation);tabs.TabPages.Add(maintenance);
             tabs.TabPages.Add(policy);
             Controls.Add(tabs);
