@@ -179,6 +179,8 @@ class LinkState:
     last_frame: float = -1.0
     last_heartbeat: float = -1.0
     last_attitude: float = -1.0
+    last_mission_current: float = -1.0
+    mission_sequence: int | None = None
     last_stream_ack_at: float = -1.0
     last_stream_ack_result: int | None = None
     stream_ack_frames: int = 0
@@ -205,6 +207,8 @@ class LinkState:
         self.ping_count = 0
         self.ping_rtt_ms = None
         self.last_frame = self.last_heartbeat = self.last_attitude = -1.0
+        self.last_mission_current = -1.0
+        self.mission_sequence = None
         self.last_stream_ack_at = -1.0
         self.last_stream_ack_result = None
         self.stream_ack_frames = 0
@@ -245,6 +249,13 @@ class LinkState:
         if msg_id == 30:
             self.last_attitude = now
             self.recent_attitudes.append(now)
+        if msg_id == 42 and packet[1] >= 1:
+            header = 6 if packet[0] == 0xFE else 10
+            component = packet[4] if packet[0] == 0xFE else packet[6]
+            if component == 1 and (packet[0] == 0xFD or packet[1] >= 2):
+                sequence_bytes = packet[header:header + min(packet[1], 2)]
+                self.mission_sequence = int.from_bytes(sequence_bytes, "little")
+                self.last_mission_current = now
         if msg_id == 77 and packet[1] >= 3:
             # A real FC-generated COMMAND_ACK for the volatile stream probe.
             # This is not interchangeable with the Pi diagnostic JSON ACK.
@@ -439,6 +450,7 @@ class LinkState:
             "fresh": self.fresh(self.last_frame),
             "native_hud_heartbeat_ready": self.fresh(self.last_heartbeat),
             "attitude_stream_active": self.fresh(self.last_attitude),
+            "mission_sequence": (self.mission_sequence if self.fresh(self.last_mission_current) else None),
             "frames": self.frames,
             "real_heartbeat_frames": self.counters[0],
             "real_attitude_frames": self.counters[30],

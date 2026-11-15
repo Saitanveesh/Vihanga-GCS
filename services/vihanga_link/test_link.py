@@ -37,7 +37,7 @@ def frame(message_id: int, payload: bytes, mav2: bool = False,
                         message_id & 255, message_id >> 8 & 255,
                         message_id >> 16 & 255)) if mav2 else bytearray(
                             (0xFE, len(payload), 1, source_system, 1, message_id))
-    crc_extra = {0: 50, 22: 220, 30: 39, 77: 143}[message_id]
+    crc_extra = {0: 50, 22: 220, 30: 39, 42: 28, 77: 143}[message_id]
     crc = 0xFFFF
     for value in bytes(header[1:]) + payload + bytes((crc_extra,)):
         b = value ^ (crc & 255)
@@ -794,3 +794,13 @@ def test_stream_requests_are_local_disarmed_and_nonpersistent(tmp_path):
     assert param_port.mav.commands == []
     assert request_parameter_snapshot_once(param_port, Heartbeat(), cfg_params)
     assert param_port.mav.commands == [("parameters", 1, 1)]
+
+
+def test_mission_item_requires_fresh_current_session():
+    state = relay_module.LinkState(connected=True)
+    asyncio.run(state.publish(frame(42, b"\x07", mav2=True)))
+    assert state.mission_sequence == 7
+    assert state.fresh(state.last_mission_current)
+    state.clear_session()
+    assert state.mission_sequence is None
+    assert not state.fresh(state.last_mission_current)

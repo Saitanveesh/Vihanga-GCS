@@ -331,6 +331,8 @@ namespace AeroHelm.GcsCloud
                         "Telemetry: " + DescribeFlag(snapshot, "fresh", "Fresh", "Stale or unavailable") + "\r\n" +
                         "Heartbeat: " + DescribeFlag(snapshot, "native_hud_heartbeat_ready", "Fresh", "Stale or unavailable") + "\r\n" +
                         "Attitude: " + DescribeFlag(snapshot, "attitude_stream_active", "Fresh", "Stale or unavailable") + "\r\n" +
+                        "Mission item: " + (snapshot.TryGetValue("mission_sequence", out var sequence) &&
+                            sequence != null ? Convert.ToString(sequence, CultureInfo.InvariantCulture) : "Unavailable") + "\r\n" +
                         "Observed UTC: " + DateTime.UtcNow.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
                 }
                 catch (Exception error) when (error is WebException || IsRecordError(error))
