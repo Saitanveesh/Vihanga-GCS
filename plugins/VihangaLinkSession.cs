@@ -199,6 +199,34 @@ namespace AeroHelm.GcsCloud
             return digest;
         }
 
+        internal static string ReadRelayHealth()
+        {
+            if (!UsesDedicatedRelay)
+                throw new InvalidOperationException("No private telemetry relay configured.");
+
+            var origin = TargetOrigin;
+            string token;
+            lock (Sync)
+            {
+                if (!string.Equals(relayOrigin, origin, StringComparison.OrdinalIgnoreCase) ||
+                    DateTime.UtcNow >= relayExpiresUtc || string.IsNullOrEmpty(relayToken))
+                    throw new InvalidOperationException("Sign in through Connections to view relay status.");
+                token = relayToken;
+            }
+
+            var request = (HttpWebRequest)WebRequest.Create(
+                new Uri(new Uri(origin + "/"), "api/v1/mavlink/health"));
+            request.Method = "GET";
+            request.AllowAutoRedirect = false;
+            request.Timeout = 10000;
+            request.ReadWriteTimeout = 10000;
+            request.Accept = "application/json";
+            request.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
+            using (var response = (HttpWebResponse)request.GetResponse())
+            using (var reader = new StreamReader(response.GetResponseStream()))
+                return reader.ReadToEnd();
+        }
+
         // Parameter inspection is a distinct authenticated GET-only operation.
         // It never opens an FC write path or redirects a bearer token.
         internal static string ReadParameters(string vehicleId, bool values = false)

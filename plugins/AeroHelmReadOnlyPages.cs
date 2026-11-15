@@ -93,13 +93,14 @@ namespace AeroHelm.GcsCloud
             header.SetRowSpan(home,2);
             layout.Controls.Add(header,0,0);
 
+            bool dedicatedFleet = section == "FLEET" && VihangaLinkSession.UsesDedicatedRelay;
             var bar = new FlowLayoutPanel {
                 Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight,
                 WrapContents = true, AutoScroll = true, Padding = new Padding(0,5,0,0),
                 AccessibleName = section + " read-only cloud actions"
             };
             layout.Controls.Add(bar,0,1);
-            if (section == "ANALYTICS" || section == "FLEET" || section == "SECURITY")
+            if (!dedicatedFleet)
             {
                 bar.Controls.Add(new Label {
                     Text = "Aircraft ID", Height = 42, Width = 84,
@@ -114,13 +115,14 @@ namespace AeroHelm.GcsCloud
 
             bool advancedTools = string.Equals(Environment.GetEnvironmentVariable(
                 "VIHANGA_ADVANCED_TOOLS"), "1", StringComparison.Ordinal);
-            if (section != "FLEET" || advancedTools)
+            if (section != "FLEET" || (advancedTools && !dedicatedFleet))
                 ActionButton(bar,"Cloud capabilities", "capabilities");
             if (section == "FLEET")
             {
                 ActionButton(bar,"Refresh fleet", "fleet");
-                ActionButton(bar,"Aircraft alerts", "alerts");
-                if (advancedTools)
+                if (!dedicatedFleet)
+                    ActionButton(bar,"Aircraft alerts", "alerts");
+                if (advancedTools && !dedicatedFleet)
                 {
                     ActionButton(bar,"Cloud metrics", "cloudMetrics");
                     ActionButton(bar,"Shadow fleet", "researchFleet");
@@ -716,6 +718,12 @@ namespace AeroHelm.GcsCloud
                 bool usedR2Capabilities = false;
                 bool usedM1Metrics = false;
                 var response = await Task.Run(() => {
+                    if (operation == "fleet" && VihangaLinkSession.UsesDedicatedRelay)
+                    {
+                        var mapped = PrivateRelayFleetSnapshot(VihangaLinkSession.ReadRelayHealth());
+                        usedPrivateRelay = true;
+                        return mapped;
+                    }
                     try { return OperationsApi.Request("GET",route); }
                     catch (WebException ex)
                     {
