@@ -112,26 +112,30 @@ namespace AeroHelm.GcsCloud
                 bar.Controls.Add(vehicleId);
             }
 
-            // Research availability is a server capability, not evidence of
-            // an installed physics twin, Kerberos realm or flight authorization.
-            ActionButton(bar,"Cloud capabilities", "capabilities");
+            bool advancedTools = string.Equals(Environment.GetEnvironmentVariable(
+                "VIHANGA_ADVANCED_TOOLS"), "1", StringComparison.Ordinal);
+            if (section != "FLEET" || advancedTools)
+                ActionButton(bar,"Cloud capabilities", "capabilities");
             if (section == "FLEET")
             {
                 ActionButton(bar,"Refresh fleet", "fleet");
-                ActionButton(bar,"Cloud metrics", "cloudMetrics");
                 ActionButton(bar,"Aircraft alerts", "alerts");
-                ActionButton(bar,"Shadow fleet", "researchFleet");
-                var scheduler=new Button {
-                    Text="Fleet scheduler lab",Width=190,Height=40,
-                    FlatStyle=FlatStyle.Flat,BackColor=Surface,ForeColor=Ink,
-                    Margin=new Padding(3,0,8,0),UseVisualStyleBackColor=false
-                };
-                scheduler.FlatAppearance.BorderSize=0;
-                scheduler.Click+=(s,e)=> {
-                    using(var window=new AeroHelmFleetLabWindow())
-                        window.ShowDialog(this);
-                };
-                bar.Controls.Add(scheduler);
+                if (advancedTools)
+                {
+                    ActionButton(bar,"Cloud metrics", "cloudMetrics");
+                    ActionButton(bar,"Shadow fleet", "researchFleet");
+                    var scheduler = new Button {
+                        Text = "Fleet scheduler lab", Width = 190, Height = 40,
+                        FlatStyle = FlatStyle.Flat, BackColor = Surface, ForeColor = Ink,
+                        Margin = new Padding(3,0,8,0), UseVisualStyleBackColor = false
+                    };
+                    scheduler.FlatAppearance.BorderSize = 0;
+                    scheduler.Click += (s,e) => {
+                        using (var window = new AeroHelmFleetLabWindow())
+                            window.ShowDialog(this);
+                    };
+                    bar.Controls.Add(scheduler);
+                }
                 SetFleetColumns();
             }
             else if (section == "SECURITY")

@@ -7,13 +7,13 @@ $project=[IO.File]::ReadAllText((Join-Path $root 'Plugins/AeroHelmCloud/AeroHelm
 $bindings=@(
  @{name='FLIGHT';source='MainV2.cs';token='MenuFlightData';purpose='Native flight data HUD'},
  @{name='PLAN';source='MainV2.cs';token='MenuFlightPlanner';purpose='Native mission planning'},
- @{name='PATHS';source='plugins/AeroHelmCloud.cs';token='new AeroHelmLinkSelector()';purpose='Manual cloud or USB/radio connection'},
+ @{name='CONNECTIONS';source='plugins/AeroHelmCloud.cs';token='new AeroHelmLinkSelector()';purpose='Manual cloud or USB/radio connection'},
  @{name='CAMERA';source='plugins/AeroHelmCloud.cs';token='new AeroHelmVisionWindow()';purpose='Camera view'},
  @{name='DIAGNOSTICS';source='plugins/AeroHelmCloud.cs';token='new AeroHelmLinkWindow()';purpose='Link evidence in TOOLS'},
  @{name='ATTITUDE';source='plugins/AeroHelmCloud.cs';token='new AeroHelmCloudAttitudeWindow()';purpose='Independent attitude monitor'},
  @{name='SURVEY';source='plugins/AeroHelmCloud.cs';token='new AeroHelmSurveyWindow()';purpose='Offline survey drafts'},
- @{name='OPERATIONS';source='plugins/AeroHelmCloud.cs';token='new AeroHelmOpsWindow()';purpose='Simulation and maintenance'},
- @{name='INTELLIGENCE';source='plugins/AeroHelmCloud.cs';token='new AeroHelmIntelWindow()';purpose='Fleet, parameters and security insights'},
+ @{name='OPERATIONS';source='plugins/AeroHelmCloud.cs';token='new AeroHelmOpsWindow()';purpose='Flight records and aircraft status'},
+ @{name='FLEET';source='plugins/AeroHelmCloud.cs';token='new AeroHelmReadOnlyPage("FLEET")';purpose='Read-only aircraft list'},
  @{name='SETTINGS';source='plugins/AeroHelmCloud.cs';token='new VihangaSettingsWindow()';purpose='Vihanga local preferences'}
 )
 $records=@()
@@ -28,15 +28,17 @@ foreach($entry in $bindings){
    backend_capabilities='REQUIRES LIVE CHECK';purpose=$entry.purpose
  }
 }
-$items=@('PATHS','CAMERA','TOOLS')
+$items=@('Connections','Operations','Tools')
 $missing=@()
 foreach($item in $items){
- $needle=if($item -eq 'TOOLS'){'new ToolStripDropDownButton("TOOLS")'}
-    else {'NewToolbarButton("'+$item+'"'}
+ $needle=if($item -eq 'Connections'){'NewToolbarButton("Connections"'}
+    else {'NewToolbarMenu("'+$item+'"'}
  if(-not $cloud.Contains($needle)){$missing+=$item}
 }
 $obsolete=@(
  'new ToolStripButton("CLOUD")',
+ 'NewToolbarButton("PATHS"',
+ 'NewToolbarButton("CAMERA"',
  'NewToolbarButton("SURVEY"',
  'NewToolbarButton("VISION"',
  'NewToolbarButton("LINK"',

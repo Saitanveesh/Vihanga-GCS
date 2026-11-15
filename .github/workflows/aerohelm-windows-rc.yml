@@ -5,10 +5,10 @@ on:
     branches: [master, vihanga-platform-integration]
     paths:
       - ".github/workflows/aerohelm-windows-rc.yml"
-      - "scripts/Install-VihangaVerified.ps1"
-      - "scripts/Consolidate-AeroHelmWindows.ps1"
-      - "scripts/Build-Integrated-AeroHelm.ps1"
-      - "scripts/Install-AeroHelmCloud.ps1"
+      - "scripts/**/*.ps1"
+      - "GCSViews/**"
+      - "MissionPlanner.csproj"
+      - ".gitmodules"
       - "plugins/**"
       - "Plugins/AeroHelmCloud/**"
       - "Tools/AeroHelmSurveyTests/**"
@@ -65,7 +65,13 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          & ./scripts/Install-VihangaVerified.ps1 -Apply
+          New-Item -ItemType Directory -Path build-logs -Force | Out-Null
+          Start-Transcript -LiteralPath 'build-logs/clean-install.log' | Out-Null
+          try {
+            & ./scripts/Install-VihangaVerified.ps1 -Apply
+          } finally {
+            Stop-Transcript | Out-Null
+          }
           $manifest = Get-Content -LiteralPath 'build-logs/aerohelm-consolidated-release.json' -Raw | ConvertFrom-Json
           if ($manifest.git_commit -ne $env:GITHUB_SHA -or $manifest.complete_previous_runtime_backup) {
             throw 'Clean installation did not produce evidence for the expected revision and empty runtime.'
@@ -77,7 +83,13 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          & ./scripts/Install-VihangaVerified.ps1 -Apply
+          New-Item -ItemType Directory -Path build-logs -Force | Out-Null
+          Start-Transcript -LiteralPath 'build-logs/rebuild.log' | Out-Null
+          try {
+            & ./scripts/Install-VihangaVerified.ps1 -Apply
+          } finally {
+            Stop-Transcript | Out-Null
+          }
           $manifest = Get-Content -LiteralPath 'build-logs/aerohelm-consolidated-release.json' -Raw | ConvertFrom-Json
           if ($manifest.git_commit -ne $env:GITHUB_SHA -or -not $manifest.complete_previous_runtime_backup) {
             throw 'Rebuild did not produce evidence for the expected revision and a preserved runtime.'
@@ -105,3 +117,13 @@ jobs:
           name: vihanga-windows-installation-${{ github.sha }}
           path: build-logs/aerohelm-consolidated-release.json
           if-no-files-found: error
+
+      - name: Archive build logs after a failed installation
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vihanga-windows-build-failure-${{ github.sha }}
+          path: |
+            build-logs/**/*.log
+            build-logs/**/*.binlog
+          if-no-files-found: ignore

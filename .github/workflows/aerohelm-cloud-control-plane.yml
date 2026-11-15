@@ -7,6 +7,7 @@ on:
       - feat/cloud-analytics-offload-r1
       - feat/cloud-oci-private-edge-r2
       - feat/vihanga-phase3-native-toolbar
+      - vihanga-platform-integration
     paths:
       - 'cloud/**'
       - '.github/workflows/aerohelm-cloud-control-plane.yml'
@@ -100,7 +101,8 @@ jobs:
             RESULT="$(psql -h 127.0.0.1 -U aerohelm_app -d aerohelm -Atc "SELECT rolsuper, rolcreatedb, rolcreaterole FROM pg_roles WHERE rolname=current_user")"
             test "$RESULT" = "f|f|f"
             psql -h 127.0.0.1 -U aerohelm_app -d aerohelm -Atc "SELECT count(*) FROM missions;" >/dev/null
-            psql -h 127.0.0.1 -U aerohelm_app -d aerohelm -Atc "SELECT version_num FROM alembic_version;" | grep -qx 0002_cloud_compute
+            psql -h 127.0.0.1 -U aerohelm_app -d aerohelm -Atc "SELECT assigned_pilot FROM vehicles LIMIT 0;" >/dev/null
+            psql -h 127.0.0.1 -U aerohelm_app -d aerohelm -Atc "SELECT version_num FROM alembic_version;" | grep -qx 0003_fleet_assignment
           '
   postgres:
     runs-on: ubuntu-latest
