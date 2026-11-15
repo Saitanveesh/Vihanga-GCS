@@ -110,16 +110,273 @@ namespace AeroHelm.GcsCloud
         private bool busy;
         private bool renewing;
 
+        public sealed class FlightRecord
+        {
+            public int Version { get; set; }
+            public string Aircraft { get; set; }
+            public string Mission { get; set; }
+            public string Notes { get; set; }
+            public string SavedUtc { get; set; }
+            public string[] ConfirmedPreFlight { get; set; }
+            public string[] ConfirmedPostFlight { get; set; }
+        }
+
+        private static TabPage CreateFlightChecklist()
+        {
+            var page = new TabPage("Flight record");
+            var layout = new FlowLayoutPanel {
+                Dock = DockStyle.Fill, Padding = new Padding(12), AutoScroll = true,
+                FlowDirection = FlowDirection.TopDown, WrapContents = false
+            };
+            page.Controls.Add(layout);
+
+            layout.Controls.Add(new Label { Text = "Aircraft ID", AutoSize = true });
+            var aircraft = new TextBox { Width = 460, MaxLength = 120 };
+            layout.Controls.Add(aircraft);
+            layout.Controls.Add(new Label { Text = "Mission reference", AutoSize = true });
+            var mission = new TextBox { Width = 460, MaxLength = 120 };
+            layout.Controls.Add(mission);
+
+            var checks = new Dictionary<string, CheckedListBox>();
+            AddChecklist(layout, checks, "Pre-flight", new[] {
+                "Aircraft and payload inspected",
+                "Battery condition and charge checked",
+                "Mission area, route and weather reviewed",
+                "Pilot control link and backup checked",
+                "Navigation status and home position confirmed",
+                "Recovery procedure reviewed with the crew"
+            });
+            AddChecklist(layout, checks, "Post-flight", new[] {
+                "Aircraft disarmed and secured",
+                "Aircraft and payload inspected",
+                "Battery condition recorded",
+                "Flight logs and issues recorded"
+            });
+
+            layout.Controls.Add(new Label { Text = "Pilot notes", AutoSize = true });
+            var notes = new TextBox {
+                Width = 460, Height = 80, MaxLength = 4000, Multiline = true,
+                ScrollBars = ScrollBars.Vertical
+            };
+            layout.Controls.Add(notes);
+            var actions = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
+            layout.Controls.Add(actions);
+            var open = new Button { Text = "Open record", AutoSize = true };
+            var save = new Button { Text = "Save record", AutoSize = true };
+            var result = new Label { AutoSize = true };
+            actions.Controls.Add(open);
+            actions.Controls.Add(save);
+            layout.Controls.Add(result);
+            const string filter = "Vihanga flight record (*.json)|*.json";
+
+            open.Click += (sender, args) => {
+                using (var dialog = new OpenFileDialog { Filter = filter, CheckFileExists = true })
+                {
+                    if (dialog.ShowDialog(page) != DialogResult.OK)
+                        return;
+
+                    if (MessageBox.Show(page, "Replace the current form with the selected record?",
+                        "Open record", MessageBoxButtons.OKCancel) != DialogResult.OK)
+                        return;
+
+                    try
+                    {
+                        var record = ReadFlightRecord(dialog.FileName);
+                        aircraft.Text = record.Aircraft;
+                        mission.Text = record.Mission;
+                        notes.Text = record.Notes;
+                        ApplyChecks(checks["Pre-flight"], record.ConfirmedPreFlight);
+                        ApplyChecks(checks["Post-flight"], record.ConfirmedPostFlight);
+                        result.Text = "Opened " + Path.GetFileName(dialog.FileName);
+                    }
+                    catch (Exception error) when (IsRecordError(error))
+                    {
+                        result.Text = "Could not open the record.";
+                        MessageBox.Show(page, error.Message);
+                    }
+                }
+            };
+
+            save.Click += (sender, args) => {
+                if (string.IsNullOrWhiteSpace(aircraft.Text) || string.IsNullOrWhiteSpace(mission.Text))
+                {
+                    result.Text = "Enter both the aircraft ID and mission reference.";
+                    return;
+                }
+
+                using (var dialog = new SaveFileDialog {
+                    Filter = filter, FileName = "Vihanga-flight-record.json", DefaultExt = "json",
+                    AddExtension = true, OverwritePrompt = true
+                })
+                {
+                    if (dialog.ShowDialog(page) != DialogResult.OK)
+                        return;
+
+                    var record = new FlightRecord {
+                        Version = 1, Aircraft = aircraft.Text.Trim(), Mission = mission.Text.Trim(),
+                        Notes = notes.Text, SavedUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+                        ConfirmedPreFlight = ReadChecks(checks["Pre-flight"]),
+                        ConfirmedPostFlight = ReadChecks(checks["Post-flight"])
+                    };
+
+                    try
+                    {
+                        WriteFlightRecord(dialog.FileName, record);
+                        result.Text = "Saved " + Path.GetFileName(dialog.FileName);
+                    }
+                    catch (Exception error) when (IsRecordError(error))
+                    {
+                        result.Text = "Could not save the record.";
+                        MessageBox.Show(page, error.Message);
+                    }
+                }
+            };
+            return page;
+        }
+
+        private static string[] ReadChecks(CheckedListBox list)
+        {
+            var result = new List<string>();
+            foreach (string item in list.CheckedItems)
+                result.Add(item);
+            return result.ToArray();
+        }
+
+        private static void ApplyChecks(CheckedListBox list, string[] checkedItems)
+        {
+            var confirmed = new HashSet<string>(checkedItems, StringComparer.Ordinal);
+            for (var index = 0; index < list.Items.Count; index++)
+                list.SetItemChecked(index, confirmed.Contains((string)list.Items[index]));
+        }
+
+        private static FlightRecord ReadFlightRecord(string path)
+        {
+            const int maxCharacters = 65536;
+            var buffer = new char[maxCharacters + 1];
+            int length;
+            using (var stream = new StreamReader(path, Encoding.UTF8))
+                length = stream.ReadBlock(buffer, 0, buffer.Length);
+
+            if (length > maxCharacters)
+                throw new InvalidDataException("The file is too large for a flight record.");
+
+            var serializer = new JavaScriptSerializer { MaxJsonLength = maxCharacters, RecursionLimit = 12 };
+            var record = serializer.Deserialize<FlightRecord>(new string(buffer, 0, length));
+            if (record == null || record.Version != 1 ||
+                string.IsNullOrWhiteSpace(record.Aircraft) || record.Aircraft.Length > 120 ||
+                string.IsNullOrWhiteSpace(record.Mission) || record.Mission.Length > 120 ||
+                record.Notes == null || record.Notes.Length > 4000 ||
+                record.ConfirmedPreFlight == null || record.ConfirmedPostFlight == null)
+                throw new InvalidDataException("The file does not contain a supported flight record.");
+            return record;
+        }
+
+        private static void WriteFlightRecord(string path, FlightRecord record)
+        {
+            var temporary = Path.Combine(Path.GetDirectoryName(path), Guid.NewGuid().ToString("N") + ".tmp");
+            try
+            {
+                File.WriteAllText(temporary, new JavaScriptSerializer().Serialize(record), Encoding.UTF8);
+                if (File.Exists(path))
+                    File.Replace(temporary, path, null);
+                else
+                    File.Move(temporary, path);
+            }
+            finally
+            {
+                if (File.Exists(temporary))
+                    File.Delete(temporary);
+            }
+        }
+
+        private static bool IsRecordError(Exception error)
+        {
+            return error is IOException || error is UnauthorizedAccessException ||
+                error is ArgumentException || error is InvalidOperationException;
+        }
+
+        private static TabPage CreateFlightStatus()
+        {
+            var page = new TabPage("Aircraft status");
+            var layout = new FlowLayoutPanel {
+                Dock = DockStyle.Fill, Padding = new Padding(12), AutoScroll = true,
+                FlowDirection = FlowDirection.TopDown, WrapContents = false
+            };
+            page.Controls.Add(layout);
+            layout.Controls.Add(new Label {
+                Text = "Relay telemetry snapshot. Use the native Flight view for live flight data.",
+                AutoSize = true
+            });
+            var refresh = new Button { Text = "Refresh telemetry", AutoSize = true };
+            var summary = new Label { Text = "Select Refresh telemetry to query the relay.", AutoSize = true };
+            layout.Controls.Add(refresh);
+            layout.Controls.Add(summary);
+            refresh.Click += async (sender, args) => {
+                refresh.Enabled = false;
+                summary.Text = "Fetching telemetry...";
+                try
+                {
+                    var snapshot = await Task.Run(() => {
+                        var response = OperationsApi.Request("GET", "api/v1/mavlink/health");
+                        return new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(response);
+                    });
+                    if (page.IsDisposed)
+                        return;
+                    if (snapshot == null || !snapshot.TryGetValue("vehicle_id", out var aircraft) ||
+                        string.IsNullOrWhiteSpace(aircraft as string))
+                        throw new InvalidDataException("The relay did not identify an aircraft.");
+
+                    summary.Text = "Aircraft: " + aircraft + "\r\n" +
+                        "Device link: " + DescribeFlag(snapshot, "device_online", "Connected", "Disconnected") + "\r\n" +
+                        "Telemetry: " + DescribeFlag(snapshot, "fresh", "Fresh", "Stale or unavailable") + "\r\n" +
+                        "Heartbeat: " + DescribeFlag(snapshot, "native_hud_heartbeat_ready", "Fresh", "Stale or unavailable") + "\r\n" +
+                        "Attitude: " + DescribeFlag(snapshot, "attitude_stream_active", "Fresh", "Stale or unavailable") + "\r\n" +
+                        "Observed UTC: " + DateTime.UtcNow.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+                }
+                catch (Exception error) when (error is WebException || IsRecordError(error))
+                {
+                    if (!page.IsDisposed)
+                        summary.Text = "Telemetry unavailable. " + error.Message;
+                }
+                finally
+                {
+                    if (!page.IsDisposed)
+                        refresh.Enabled = true;
+                }
+            };
+            return page;
+        }
+
+        private static string DescribeFlag(Dictionary<string, object> values, string key, string yes, string no)
+        {
+            if (!values.TryGetValue(key, out var value) || !(value is bool flag))
+                return "Unavailable";
+            return flag ? yes : no;
+        }
+
+        private static void AddChecklist(FlowLayoutPanel layout,
+            Dictionary<string, CheckedListBox> checks, string title, string[] entries)
+        {
+            layout.Controls.Add(new Label { Text = title, AutoSize = true });
+            var list = new CheckedListBox { Width = 460, CheckOnClick = true };
+            list.Items.AddRange(entries);
+            list.Height = list.ItemHeight * entries.Length + SystemInformation.BorderSize.Height * 2 + 2;
+            checks.Add(title, list);
+            layout.Controls.Add(list);
+        }
+
         public AeroHelmOpsWindow()
         {
-            Text="VIHANGA — Operations | Simulator and Bench Maintenance";
+            Text="Vihanga Operations";
             StartPosition=FormStartPosition.CenterParent;
             Width=860;Height=730;
             MinimumSize=new Drawing.Size(560,460);
             var tabs=new TabControl{Dock=DockStyle.Fill};
-            var simulation=new TabPage("AUTONOMY — SIMULATION ONLY");
-            var maintenance=new TabPage("MAINTENANCE — PHYSICAL APPROVAL");
+            var simulation=new TabPage("Simulator");
+            var maintenance=new TabPage("Bench maintenance");
             var policy=new TabPage("CAPABILITIES — READ ONLY");
+            tabs.TabPages.Add(CreateFlightChecklist());
+            tabs.TabPages.Add(CreateFlightStatus());
             tabs.TabPages.Add(simulation);tabs.TabPages.Add(maintenance);
             tabs.TabPages.Add(policy);
             Controls.Add(tabs);

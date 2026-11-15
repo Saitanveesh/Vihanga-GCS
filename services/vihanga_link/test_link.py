@@ -37,10 +37,9 @@ def frame(message_id: int, payload: bytes, mav2: bool = False,
                         message_id & 255, message_id >> 8 & 255,
                         message_id >> 16 & 255)) if mav2 else bytearray(
                             (0xFE, len(payload), 1, source_system, 1, message_id))
-    assert message_id in (0, 22, 30)
+    crc_extra = {0: 50, 22: 220, 30: 39, 77: 143}[message_id]
     crc = 0xFFFF
-    for value in bytes(header[1:]) + payload + bytes((
-            {0: 50, 22: 220, 30: 39}[message_id],)):
+    for value in bytes(header[1:]) + payload + bytes((crc_extra,)):
         b = value ^ (crc & 255)
         b ^= b << 4 & 255
         crc = ((crc >> 8) ^ (b << 8) ^ (b << 3) ^ (b >> 4)) & 65535

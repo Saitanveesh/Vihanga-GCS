@@ -7,6 +7,7 @@ sequence and interlock gates required before a separate hardware review.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
 import hashlib
 import hmac
 import json
@@ -69,7 +70,8 @@ class SimulatedControlPlane:
     """
 
     ACTIONS = frozenset({
-        "PARAM_WRITE_SIM", "MISSION_UPLOAD_SIM", "MISSION_START_SIM"
+        "PARAM_READ_SIM", "PARAM_WRITE_SIM", "MISSION_READ_SIM",
+        "MISSION_UPLOAD_SIM", "MISSION_START_SIM"
     })
 
     def __init__(self, clock: Callable[[], float] = time.monotonic):
@@ -129,21 +131,28 @@ class SimulatedControlPlane:
         digest = self._digest(canonical)
         existing = self.receipts.get(request_id)
         if existing is not None:
-            if existing["digest"] != digest:
+            if (existing["digest"] != digest or
+                existing["lease_digest"] != lease.token_digest):
                 raise AuthorityRejected("Idempotency identifier reused with different command")
-            return dict(existing["public"])
+            return self.status(request_id)
         if sequence != lease.last_sequence + 1:
             raise AuthorityRejected("Out-of-order simulator command")
         evidence.require_safe(vehicle_id, lease.system_id)
         if action in ("PARAM_WRITE_SIM", "MISSION_UPLOAD_SIM") and not evidence.disarmed:
             raise AuthorityRejected("Parameter and mission preparation require disarmed vehicle")
-        if action == "PARAM_WRITE_SIM":
+        if action in ("PARAM_READ_SIM", "PARAM_WRITE_SIM"):
             name, value = payload.get("name"), payload.get("value")
-            if (not isinstance(name, str) or
-                not re.fullmatch(r"[A-Z][A-Z0-9_]{0,15}", name) or
+            fields = {"name", "value"} if action == "PARAM_WRITE_SIM" else {"name"}
+            if (payload.keys() != fields or not isinstance(name, str) or
+                not re.fullmatch(r"[A-Z][A-Z0-9_]{0,15}", name)):
+                raise AuthorityRejected("Invalid simulator parameter request")
+            if action == "PARAM_WRITE_SIM" and (
                 not isinstance(value, (int, float)) or isinstance(value, bool) or
-                not math.isfinite(value)):
+                not math.isfinite(value)
+            ):
                 raise AuthorityRejected("Invalid typed simulator parameter value")
+        elif action == "MISSION_READ_SIM" and payload:
+            raise AuthorityRejected("Mission read takes no payload")
         elif action == "MISSION_UPLOAD_SIM":
             if payload != {"revision_sha256": plan_digest}:
                 raise AuthorityRejected("Mission upload revision mismatch")
@@ -158,7 +167,8 @@ class SimulatedControlPlane:
                   "hardware_actuated": False}
         self.receipts[request_id] = {
             "digest": digest, "public": public, "action": action,
-            "payload": payload, "plan_digest": plan_digest,
+            "payload": dict(payload), "plan_digest": plan_digest,
+            "lease_digest": lease.token_digest,
             "vehicle_id": vehicle_id, "expires_at": min(
                 self.clock() + ttl_seconds, lease.expires_at)}
         self.pending[request_id] = (vehicle_id, self.receipts[request_id]["expires_at"])
@@ -171,12 +181,12 @@ class SimulatedControlPlane:
         if self.clock() >= entry["expires_at"]:
             entry["public"]["status"] = "EXPIRED_SIM"
             self.pending.pop(request_id, None)
-            return dict(entry["public"])
+            return deepcopy(entry["public"])
         entry["public"]["pi_transport_ack"] = bool(accepted)
         entry["public"]["status"] = "PI_ACCEPTED_SIM" if accepted else "PI_REFUSED_SIM"
         if not accepted:
             self.pending.pop(request_id, None)
-        return dict(entry["public"])
+        return deepcopy(entry["public"])
 
     def observe_fc_result(self, request_id: str, success: bool,
                           evidence: VehicleEvidence) -> dict:
@@ -198,13 +208,26 @@ class SimulatedControlPlane:
                 vehicle = entry["vehicle_id"]
                 if entry["action"] == "MISSION_UPLOAD_SIM":
                     self.loaded_missions[vehicle] = entry["plan_digest"]
+                elif entry["action"] == "MISSION_READ_SIM":
+                    entry["public"]["result"] = {
+                        "revision_sha256": self.loaded_missions.get(vehicle)
+                    }
+                elif entry["action"] == "PARAM_READ_SIM":
+                    name = entry["payload"]["name"]
+                    entry["public"]["result"] = {
+                        "name": name, "value": self.parameters.get(vehicle, {}).get(name)
+                    }
                 elif entry["action"] == "PARAM_WRITE_SIM":
                     self.parameters.setdefault(vehicle, {})[
                         entry["payload"]["name"]] = entry["payload"]["value"]
         self.pending.pop(request_id, None)
-        return dict(entry["public"])
+        return deepcopy(entry["public"])
 
     def status(self, request_id: str) -> dict:
         if request_id not in self.receipts:
             raise AuthorityRejected("Unknown simulator command")
-        return dict(self.receipts[request_id]["public"])
+        entry = self.receipts[request_id]
+        if request_id in self.pending and self.clock() >= entry["expires_at"]:
+            entry["public"]["status"] = "EXPIRED_SIM"
+            self.pending.pop(request_id)
+        return deepcopy(entry["public"])
