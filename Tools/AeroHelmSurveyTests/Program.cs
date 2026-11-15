@@ -65,6 +65,21 @@ public static class Program
         options.West = 179.99;
         options.East = -179.99;
         Assert(Throws(() => SurveyPlanner.Generate(options)), "antimeridian crossing rejected");
+        var corridor = SurveyPlanner.GenerateCorridor(0, 0, 0, .001, 50, 20, 30, 5);
+        Assert(corridor.Points.Count == 8, "corridor pass spacing stays within the request");
+        Assert(corridor.Points[0].Longitude == 0 && corridor.Points[1].Longitude == .001 &&
+               corridor.Points[2].Longitude == .001 && corridor.Points[3].Longitude == 0,
+               "corridor passes alternate direction");
+        Assert(Math.Abs(SurveyPlanner.DistanceMetres(corridor.Points[0].Latitude, 0,
+                   corridor.Points[7].Latitude, 0) - 50) < .001, "corridor covers requested width");
+        Assert(Throws(() => SurveyPlanner.GenerateCorridor(0, 0, 0, 0, 50, 20, 30, 5)),
+               "coincident endpoints rejected");
+        Assert(Throws(() => SurveyPlanner.GenerateCorridor(0, 179.99, 0, -179.99, 50, 20, 30, 5)),
+               "date line centerline rejected");
+        Assert(Throws(() => SurveyPlanner.GenerateCorridor(0, 0, 0, .001, 500, 5, 30, 5)),
+               "corridor waypoint cap enforced");
+        corridor.Points[1].RelativeAltitudeMetres = double.NaN;
+        Assert(Throws(() => SurveyPlanner.ToQgcWpl110(corridor)), "invalid draft altitude rejected at export");
         Console.WriteLine("AeroHelm Survey Planner: PASS (" + checks + " assertions)");
     }
 }
