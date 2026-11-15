@@ -349,7 +349,7 @@ Require-Text $privatePi 'valid_uart_owner_probe' 'Pi agent must refuse a second 
 Require-Text $privatePi 'is_disarmed_autopilot_heartbeat' 'Local stream negotiation requires an identified disarmed autopilot.'
 Require-Text $privatePi 'request_parameter_snapshot_once' 'Read-only parameter inventory must require an explicit disarmed local request.'
 Require-Text $relaySession 'RequestDisarmedTelemetry' 'Private relay telemetry request must have a signed-in client.'
-Require-Text $workspace 'Request real FC streams' 'LINK must request missing flight-data streams without duplicating HUD.'
+Require-Text $workspace 'Request Telemetry' 'LINK must request missing flight-data streams without duplicating HUD.'
 Require-Text $workspace 'RequestDisarmedTelemetry(vehicleId)' 'LINK must use authenticated fixed telemetry-request API.'
 Require-Text $privateRelay 'allow_disarmed_telemetry_requests' 'Telemetry duplex must be explicitly opted in on relay.'
 Require-Text $privateRelay '@app.post("/api/v1/vehicles/{vehicle_id}/telemetry/probe")' 'Fixed telemetry-request endpoint missing.'
@@ -498,10 +498,7 @@ Require-Text $workspace 'AEROHELM_VISION_AUTO_OPEN' 'VISION must open the saved 
 Require-Text $workspace 'AeroHelmWorkspaceSettings.CheckedPrivateUrl(url.Text)' 'Camera URL validation missing.'
 Require-Text $workspace 'refreshTimer.Interval = 15000' 'LINK bounded polling setting missing.'
 Require-Text $workspace 'refreshTimer.Stop()' 'LINK watcher must stop on close.'
-# Windows PowerShell 5.1 decodes BOM-less .ps1 files as ANSI. Construct the
-# Unicode em dash at runtime so this source test works on PS 5.1 and PS 7+.
-$opsPolicyTitle = 'CAPABILITIES ' + [char]0x2014 + ' READ ONLY'
-Require-Text $operations $opsPolicyTitle 'OPS policy page is missing.'
+Require-Text $operations 'Cloud Status' 'OPS policy page is missing.'
 Require-Text $operations 'Api("GET","api/v1/operations/capabilities")' 'OPS policy must be a read-only GET.'
 foreach ($excluded in @('obj3','Tools')) {
     Require-Text $mainProject ('<Compile Remove="'+$excluded+'\**" />') "Main GCS must exclude $excluded from SDK default compilation."

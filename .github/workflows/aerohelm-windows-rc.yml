@@ -12,7 +12,13 @@ on:
       - "plugins/**"
       - "Plugins/AeroHelmCloud/**"
       - "Tools/AeroHelmSurveyTests/**"
+      - "services/vihanga_link/**"
+      - "cloud/**"
   workflow_dispatch:
+
+concurrency:
+  group: vihanga-windows-installer-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -25,10 +31,10 @@ jobs:
     env:
       AEROHELM_CLOUD_READONLY: "1"
     steps:
-      - name: Check out the reviewed release branch
+      - name: Check out the reviewed source revision
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
           submodules: recursive
           persist-credentials: false
           fetch-depth: 1
@@ -39,7 +45,13 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $commit = (& git rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $commit -ne $env:GITHUB_SHA) {
-            throw 'Release branch moved after the workflow was queued. Run validation for the new revision.'
+            throw 'The checked-out revision differs from the event commit.'
+          }
+          # The installer accepts reviewed named branches only. Attach the
+          # exact event commit to the runner's local branch before invoking it.
+          & git switch -C $env:GITHUB_REF_NAME
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not establish the local release branch.'
           }
           if (Test-Path -LiteralPath 'bin/Release/net461') {
             throw 'This validation must start with an empty runtime.'

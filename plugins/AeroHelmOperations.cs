@@ -304,11 +304,11 @@ namespace AeroHelm.GcsCloud
             };
             page.Controls.Add(layout);
             layout.Controls.Add(new Label {
-                Text = "Relay telemetry snapshot. Use the native Flight view for live flight data.",
+                Text = "For continuous telemetry, open Flight Data.",
                 AutoSize = true
             });
             var refresh = new Button { Text = "Refresh telemetry", AutoSize = true };
-            var summary = new Label { Text = "Select Refresh telemetry to query the relay.", AutoSize = true };
+            var summary = new Label { Text = "No telemetry checked yet.", AutoSize = true };
             layout.Controls.Add(refresh);
             layout.Controls.Add(summary);
             refresh.Click += async (sender, args) => {
@@ -376,7 +376,7 @@ namespace AeroHelm.GcsCloud
             var tabs=new TabControl{Dock=DockStyle.Fill};
             var simulation=new TabPage("Simulator");
             var maintenance=new TabPage("Bench maintenance");
-            var policy=new TabPage("CAPABILITIES — READ ONLY");
+            var policy=new TabPage("Cloud Status");
             tabs.TabPages.Add(CreateFlightChecklist());
             tabs.TabPages.Add(CreateFlightStatus());
             tabs.TabPages.Add(simulation);tabs.TabPages.Add(maintenance);
@@ -384,9 +384,7 @@ namespace AeroHelm.GcsCloud
             Controls.Add(tabs);
             status.Dock=DockStyle.Bottom;status.Height=140;status.Multiline=true;
             status.ScrollBars=ScrollBars.Vertical;status.ReadOnly=true;
-            status.Text="No commands sent. Cloud operations require an authenticated login. " +
-                "Hardware autonomous flight is blocked; supervised calibration requires " +
-                "independent local Pi approval.";
+            status.Text="Sign in to check cloud status.";
             Controls.Add(status);
             leaseRenewal.Interval=10000; // 30-second lease; renew every 10 seconds
             leaseRenewal.Tick+=async(s,e)=>await RenewSimulationLease();
@@ -394,49 +392,46 @@ namespace AeroHelm.GcsCloud
             var sim=new FlowLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(12),
                 AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false};
             simulation.Controls.Add(sim);
-            sim.Controls.Add(new Label{Text="Paste 2-80 waypoint rows: latitude,longitude,relative_altitude_m",
+            sim.Controls.Add(new Label{Text="Paste 2–80 waypoints in this order: latitude, longitude, relative altitude (m).",
                 Width=690,Height=25});
             missionText.Multiline=true;missionText.Width=680;missionText.Height=150;
             missionText.ScrollBars=ScrollBars.Vertical;
             sim.Controls.Add(missionText);
-            var load=new Button{Text="Load SURVEY .waypoints draft",Width=255};
+            var load=new Button{Text="Load WP File",Width=255};
             load.Click+=(s,e)=>LoadSurveyFile();
             sim.Controls.Add(load);
-            var draft=new Button{Text="Create simulated mission draft",Width=255};
+            var draft=new Button{Text="Create Mission Draft",Width=255};
             draft.Click+=async(s,e)=>await CreateDraft();
             sim.Controls.Add(draft);
-            sim.Controls.Add(new Label{Text="Mission ID (generated draft)",Width=680});
+            sim.Controls.Add(new Label{Text="Mission ID",Width=680});
             missionId.Width=680;missionId.ReadOnly=true;sim.Controls.Add(missionId);
-            var lease=new Button{Text="Acquire simulation control lease",Width=255};
+            var lease=new Button{Text="Request Simulator Control",Width=255};
             lease.Click+=async(s,e)=>await AcquireLease();
             sim.Controls.Add(lease);
-            sim.Controls.Add(new Label{Text="Simulation lease ID (memory only; clear when window closes)",Width=680});
+            sim.Controls.Add(new Label{Text="Control Lease ID",Width=680});
             leaseId.ReadOnly=true;leaseId.Width=680;sim.Controls.Add(leaseId);
-            start.Text="START simulation only";start.Width=255;
-            abort.Text="ABORT simulation";abort.Width=255;
+            start.Text="Start Simulation";start.Width=255;
+            abort.Text="Abort Simulation";abort.Width=255;
             start.Click+=async(s,e)=>await MissionAction("start");
             abort.Click+=async(s,e)=>await MissionAction("abort");
             sim.Controls.Add(start);sim.Controls.Add(abort);
-            var pause = new Button{Text="PAUSE simulation",Width=255};
+            var pause = new Button{Text="Pause Simulation",Width=255};
             pause.Click+=async(s,e)=>await MissionAction("pause");
             sim.Controls.Add(pause);
-            var resume = new Button{Text="RESUME simulation",Width=255};
+            var resume = new Button{Text="Resume Simulation",Width=255};
             resume.Click+=async(s,e)=>await MissionAction("resume");
             sim.Controls.Add(resume);
             var refresh = new Button{Text="Refresh mission progress",Width=255};
             refresh.Click+=async(s,e)=>await RefreshMission();
             sim.Controls.Add(refresh);
             sim.Controls.Add(new Label{Width=680,Height=55,
-                Text="AeroHelm production Oracle VM has simulation OFF. Use a dedicated SITL/simulation API instance. " +
-                     "Neither these controls nor the waypoint draft can command a real Pixhawk."});
+                Text="Connect to a server with simulation enabled."});
 
             var maint=new FlowLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(12),
                 AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false};
             maintenance.Controls.Add(maint);
             maint.Controls.Add(new Label{Width=680,Height=65,
-                Text="Select one allowed Pixhawk sensor calibration. Hardware must be DISARMED, " +
-                     "all propellers removed, and an on-site person must approve the exact request " +
-                     "locally at the Pi within 45 seconds. No flight commands are available."});
+                Text="Disarm the Pixhawk and remove all propellers. A technician must approve the calibration on the Pi within 45 seconds."});
             kind.DropDownStyle=ComboBoxStyle.DropDownList;
             kind.Items.AddRange(new object[]{"GYRO","BAROMETER","ACCEL_SIMPLE"});
             kind.SelectedIndex=0;kind.Width=250;maint.Controls.Add(kind);
@@ -444,16 +439,16 @@ namespace AeroHelm.GcsCloud
             onsite.Width=500;maint.Controls.Add(onsite);
             props.Text="I confirm all propellers are removed and Pixhawk is disarmed";
             props.Width=550;maint.Controls.Add(props);
-            cal.Text="Request supervised calibration";cal.Width=260;
+            cal.Text="Request Calibration";cal.Width=260;
             cal.Click+=async(s,e)=>await Calibrate();
             maint.Controls.Add(cal);
-            var checkCal = new Button{Text="Refresh calibration result",Width=260};
+            var checkCal = new Button{Text="Check Calibration",Width=260};
             checkCal.Click+=async(s,e)=>await RefreshCalibration();
             maint.Controls.Add(checkCal);
             maint.Controls.Add(new Label{Width=650,Height=90,
-                Text="After requesting, the local Pi operator must run:\n" +
+                Text="To approve the request, run this on the aircraft’s Pi:\n" +
                     "agent/.venv/bin/python -m agent.supervised_calibration <request-uuid>\n" +
-                    "The remote API alone cannot approve the physical calibration."});
+                    "Use the request ID shown below."});
 
             // Read-only policy overview is suitable for checking the cloud
             // before any later Pi/hardware acceptance. Never grants a lease.
@@ -463,18 +458,18 @@ namespace AeroHelm.GcsCloud
             };
             policy.Controls.Add(policyPage);
             policyPage.Controls.Add(new Label {
-                Text="Cloud capabilities are declarations, NOT a physical flight-clearance.",
+                Text="Cloud status is read-only.",
                 Width=680,Height=44
             });
             var capabilityReport=new TextBox {
                 Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,
                 Width=680,Height=260,
-                Text="No authenticated policy response has been requested."
+                Text="No cloud status checked yet."
             };
-            var refreshPolicy=new Button {Text="Refresh read-only cloud capabilities",Width=310};
+            var refreshPolicy=new Button {Text="Refresh Cloud Status",Width=310};
             refreshPolicy.Click+=async(s,e)=>{
                 refreshPolicy.Enabled=false;
-                capabilityReport.Text="Retrieving authenticated operations policy...";
+                capabilityReport.Text="Checking cloud status...";
                 try
                 {
                     capabilityReport.Text=await Api("GET","api/v1/operations/capabilities");
@@ -506,17 +501,17 @@ namespace AeroHelm.GcsCloud
             // The newer fleet service has a different, virtual-only API.
             // These GET actions do not create leases, missions or device jobs.
             var cloudR2Capabilities=new Button {
-                Text="Inspect fleet service capabilities (read-only)",Width=350
+                Text="Fleet Service Status",Width=350
             };
             cloudR2Capabilities.Click+=async(s,e)=>{
                 cloudR2Capabilities.Enabled=false;
                 try
                 {
-                    capabilityReport.Text="Cloud fleet service capabilities (reported):"+
+                    capabilityReport.Text="Fleet service capabilities:"+
                         Environment.NewLine+
                         await Api("GET","api/v1/capabilities")+
                         Environment.NewLine+
-                        "This is not evidence of supported physical aircraft control.";
+                        "Physical flight control is disabled.";
                 }
                 catch(Exception ex)
                 {
@@ -526,33 +521,31 @@ namespace AeroHelm.GcsCloud
             };
             policyPage.Controls.Add(cloudR2Capabilities);
             var cloudR2Missions=new Button {
-                Text="Inspect virtual mission registry (read-only)",Width=350
+                Text="List Simulator Missions",Width=350
             };
             cloudR2Missions.Click+=async(s,e)=>{
                 cloudR2Missions.Enabled=false;
                 try
                 {
-                    capabilityReport.Text="Virtual mission registry (no commands):"+
+                    capabilityReport.Text="Simulator missions:"+
                         Environment.NewLine+
                         await Api("GET","api/v1/missions?limit=50");
                 }
                 catch(Exception ex)
                 {
-                    capabilityReport.Text="Virtual mission registry unavailable: "+Error(ex);
+                    capabilityReport.Text="Simulator missions unavailable: "+Error(ex);
                 }
                 finally { if(!IsDisposed)cloudR2Missions.Enabled=true; }
             };
             policyPage.Controls.Add(cloudR2Missions);
             policyPage.Controls.Add(new Label {
                 Width=680,Height=80,
-                Text="Only a physically present Pi operator may authorize permitted supervised calibration."+
-                     Environment.NewLine+
-                     "Cloud autonomous missions run in a separate simulator; real aircraft execution remains blocked."
+                Text="Cloud missions run in the simulator. Bench calibration requires approval on the aircraft’s Pi."
             });
 
             foreach(var panel in new[]{sim,maint,policyPage})
             {
-                var home=new Button {Text="CLOSE OPS",Width=300,Height=42};
+                var home=new Button {Text="Close",Width=300,Height=42};
                 home.Click+=(s,e)=>Close();
                 panel.Controls.Add(home);
                 panel.Controls.SetChildIndex(home,0);
@@ -748,7 +741,7 @@ namespace AeroHelm.GcsCloud
         private string RequestWithLease(string action,string id,string lease)
         {
             if(string.IsNullOrWhiteSpace(lease))
-                throw new InvalidOperationException("Acquire simulation control lease first.");
+                throw new InvalidOperationException("Request Simulator Control first.");
             if(string.IsNullOrWhiteSpace(Program.AeroHelmOperatorToken) ||
                DateTime.UtcNow>=Program.AeroHelmTokenExpiresUtc)
                 throw new InvalidOperationException("Cloud session expired.");
