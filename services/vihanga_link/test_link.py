@@ -613,10 +613,14 @@ def test_reconnect_expires_old_session_and_drops_stale_evidence(credentials):
                     break
                 time.sleep(0.01)
             assert link.frames == 1
-            link.last_heartbeat = time.monotonic() - 30
+            assert link.health(cfg.vehicle_id)["link_state"] == "live"
+            link.last_heartbeat = link.last_frame = time.monotonic() - 30
             assert not link.health(cfg.vehicle_id)["native_hud_heartbeat_ready"]
+            assert link.health(cfg.vehicle_id)["link_state"] == "stale"
         h = client.get("/api/v1/mavlink/health").json()
         assert not h["device_online"]
+        assert h["link_state"] == "offline"
+        assert h["last_observed_frame_age_ms"] >= 0
         assert not h["native_hud_heartbeat_ready"]
         assert not h["native_quick_data_ready"]
         assert not h["flight_data_streams"]["33"]["fresh"]
@@ -629,7 +633,11 @@ def test_reconnect_expires_old_session_and_drops_stale_evidence(credentials):
         with client.websocket_connect("/ws/mavlink/device/AH-HW-001",
               headers={"Authorization": "Bearer " + token}):
             assert app.state.link.health(cfg.vehicle_id)["real_heartbeat_frames"] == 0
-            assert app.state.link.health(cfg.vehicle_id)["epoch"] == 2
+            health = app.state.link.health(cfg.vehicle_id)
+            assert health["epoch"] == 2
+            assert health["link_state"] == "waiting_for_telemetry"
+            assert health["last_observed_frame_age_ms"] >= 0
+            assert health["frame_age_ms"] is None
 
 
 class Heartbeat:
