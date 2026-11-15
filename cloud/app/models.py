@@ -20,6 +20,7 @@ class Vehicle(Base):
     kind: Mapped[str] = mapped_column(String(12), nullable=False)  # virtual or hardware
     profile: Mapped[dict] = mapped_column(JSON, nullable=False)
     active_mission: Mapped[str | None] = mapped_column(String(36))
+    assigned_pilot: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
     __table_args__ = (UniqueConstraint("tenant", "name"), Index("ix_vehicle_tenant", "tenant"))
 

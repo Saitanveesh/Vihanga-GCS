@@ -28,7 +28,7 @@ def run_forever(*, interval_seconds: float = 0.5) -> None:
     engine = create_engine(cfg.database_url, pool_pre_ping=True, pool_recycle=1800)
     with engine.connect() as connection:
         version = connection.scalar(text("SELECT version_num FROM alembic_version"))
-        if version != "0002_cloud_compute":
+        if version != "0003_fleet_assignment":
             raise RuntimeError("Cloud compute schema migration not applied")
 
     terminate = False
