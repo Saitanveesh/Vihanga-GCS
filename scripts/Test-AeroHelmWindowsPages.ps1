@@ -487,6 +487,8 @@ foreach ($route in @(
 )) {
     Require-Text $pages $route "Missing authenticated read-only backend contract: $route"
 }
+Require-Text $pages 'PrivateRelayFleetSnapshot(VihangaLinkSession.ReadRelayHealth())' 'Fleet must use the active private relay session.'
+Require-Text $relaySession 'new Uri(new Uri(origin + "/"), "api/v1/mavlink/health")' 'Private relay fleet must use the checked telemetry origin.'
 Require-Text $pages 'OperationsApi.Request("GET",route)' 'Page requests must use GET only.'
 Require-Text $pages 'case "discover": route = "api/v2/fleet"' 'Analytics must discover registered aircraft.'
 Require-Text $pages 'availableAircraft.Items.Count == 1' 'Auto-selection must require one unambiguous registered aircraft.'

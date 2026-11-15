@@ -60,8 +60,11 @@ namespace AeroHelm.GcsCloud
                 "Flight records, aircraft status, fleet and cameras");
             _operations.DropDownItems.Add("Flight records and status", null,
                 (sender, e) => ShowWorkspace(new AeroHelmOpsWindow()));
-            _operations.DropDownItems.Add("Fleet", null,
-                (sender, e) => ShowWorkspace(new AeroHelmReadOnlyPage("FLEET")));
+            _operations.DropDownItems.Add("Fleet", null, (sender, e) =>
+            {
+                if (VihangaLinkLoginWindow.EnsureSignedIn(main))
+                    ShowWorkspace(new AeroHelmReadOnlyPage("FLEET"));
+            });
             _operations.DropDownItems.Add("Cameras", null,
                 (sender, e) => ShowWorkspace(new AeroHelmVisionWindow()));
             menu.Items.Insert(at++, _operations);

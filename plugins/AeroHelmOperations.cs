@@ -339,24 +339,28 @@ namespace AeroHelm.GcsCloud
             {
                 if (!refresh.Enabled || page.IsDisposed)
                     return;
-                var token = Program.AeroHelmOperatorToken;
-                var origin = Program.AeroHelmCloudOrigin;
-                if (string.IsNullOrEmpty(token) || DateTime.UtcNow >= Program.AeroHelmTokenExpiresUtc)
-                {
-                    ClearTelemetry("Sign in to view cloud telemetry.");
-                    return;
-                }
                 refresh.Enabled = false;
                 try
                 {
+                    var dedicated = VihangaLinkSession.UsesDedicatedRelay;
+                    var token = VihangaLinkSession.AccessToken;
+                    if (string.IsNullOrEmpty(token) || DateTime.UtcNow >= VihangaLinkSession.ExpiresUtc)
+                    {
+                        ClearTelemetry("Sign in to view cloud telemetry.");
+                        return;
+                    }
+                    var origin = VihangaLinkSession.CloudOrigin;
                     var snapshot = await Task.Run(() => {
-                        var response = OperationsApi.Request("GET", "api/v1/mavlink/health");
+                        var response = dedicated
+                            ? VihangaLinkSession.ReadRelayHealth()
+                            : OperationsApi.Request("GET", "api/v1/mavlink/health");
                         return new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(response);
                     });
                     if (page.IsDisposed)
                         return;
-                    if (token != Program.AeroHelmOperatorToken || origin != Program.AeroHelmCloudOrigin ||
-                        DateTime.UtcNow >= Program.AeroHelmTokenExpiresUtc)
+                    if (dedicated != VihangaLinkSession.UsesDedicatedRelay ||
+                        token != VihangaLinkSession.AccessToken || origin != VihangaLinkSession.CloudOrigin ||
+                        DateTime.UtcNow >= VihangaLinkSession.ExpiresUtc)
                     {
                         ClearTelemetry("Cloud session changed.");
                         return;
