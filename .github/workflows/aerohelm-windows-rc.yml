@@ -2,13 +2,16 @@ name: Vihanga Windows Installer Validation
 
 on:
   push:
-    branches: [master]
+    branches: [master, vihanga-platform-integration]
     paths:
       - ".github/workflows/aerohelm-windows-rc.yml"
       - "scripts/Install-VihangaVerified.ps1"
       - "scripts/Consolidate-AeroHelmWindows.ps1"
       - "scripts/Build-Integrated-AeroHelm.ps1"
       - "scripts/Install-AeroHelmCloud.ps1"
+      - "plugins/**"
+      - "Plugins/AeroHelmCloud/**"
+      - "Tools/AeroHelmSurveyTests/**"
   workflow_dispatch:
 
 permissions:
@@ -16,7 +19,7 @@ permissions:
 
 jobs:
   installer:
-    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feat/vihanga-phase3-native-toolbar'
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feat/vihanga-phase3-native-toolbar' || github.ref == 'refs/heads/vihanga-platform-integration'
     runs-on: windows-latest
     timeout-minutes: 120
     env:
