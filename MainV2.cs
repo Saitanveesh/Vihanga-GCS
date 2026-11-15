@@ -1099,6 +1099,11 @@ namespace MissionPlanner
             if (Program.Logo2 != null)
                 MenuArduPilot.Image = Program.Logo2;
 
+            if (string.Equals(Application.ProductName, "Vihanga GCS", StringComparison.Ordinal) ||
+                string.Equals(Environment.GetEnvironmentVariable("AEROHELM_REDUCED_TOOLBAR"),
+                    "1", StringComparison.Ordinal))
+                MenuArduPilot.Available = false;
+
             Application.DoEvents();
 
             Comports.Add(comPort);

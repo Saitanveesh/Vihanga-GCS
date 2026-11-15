@@ -23,7 +23,7 @@ namespace AeroHelm.GcsCloud
         private ToolStripButton _paths;
         private ToolStripDropDownButton _operations;
         private ToolStripDropDownButton _workspaces;
-        private ToolStripMenuItem _planSurvey;
+        private ToolStripButton _camera;
         private readonly Dictionary<ToolStripItem, bool> _nativeAvailability =
             new Dictionary<ToolStripItem, bool>();
         internal static AeroHelmReceiveOnlyBridge ActiveNativeBridge;
@@ -57,7 +57,7 @@ namespace AeroHelm.GcsCloud
             menu.Items.Insert(at++, _paths);
 
             _operations = NewToolbarMenu("Operations", "OPS",
-                "Flight records, aircraft status, fleet and cameras");
+                "Flight records, aircraft status and fleet");
             _operations.DropDownItems.Add("Flight records and status", null,
                 (sender, e) => ShowWorkspace(new AeroHelmOpsWindow()));
             _operations.DropDownItems.Add("Fleet", null, (sender, e) =>
@@ -65,18 +65,9 @@ namespace AeroHelm.GcsCloud
                 if (VihangaLinkLoginWindow.EnsureSignedIn(main))
                     ShowWorkspace(new AeroHelmReadOnlyPage("FLEET"));
             });
-            _operations.DropDownItems.Add("Cameras", null,
-                (sender, e) => ShowWorkspace(new AeroHelmVisionWindow()));
             menu.Items.Insert(at++, _operations);
 
-            _planSurvey = new ToolStripMenuItem("Survey and corridor planning");
-            _planSurvey.Click += (sender, e) => ShowWorkspace(new AeroHelmSurveyWindow());
-            Host.FPMenuMap.Items.Add(_planSurvey);
-
-            _workspaces = NewToolbarMenu("Tools", "SETTINGS",
-                "Planning tools, diagnostics and settings");
-            _workspaces.DropDownItems.Add("Survey and corridor planning", null,
-                (sender, e) => ShowWorkspace(new AeroHelmSurveyWindow()));
+            _workspaces = NewToolbarMenu("Tools", "SETTINGS", "Diagnostics and settings");
             _workspaces.DropDownItems.Add("Link diagnostics", null,
                 (sender, e) => ShowWorkspace(new AeroHelmLinkWindow()));
             _workspaces.DropDownItems.Add("Vihanga settings", null,
@@ -128,7 +119,10 @@ namespace AeroHelm.GcsCloud
                 _workspaces.DropDownItems.Add("Fleet diagnostics", null,
                     (sender, e) => ShowWorkspace(new AeroHelmIntelWindow()));
             }
-            menu.Items.Insert(at, _workspaces);
+            menu.Items.Insert(at++, _workspaces);
+            _camera = NewToolbarButton("Camera", "VISION", "Open aircraft cameras");
+            _camera.Click += (sender, e) => ShowWorkspace(new AeroHelmVisionWindow());
+            menu.Items.Insert(at, _camera);
 
             _cloudLinkWatchdog.Interval = 5000;
             _cloudLinkWatchdog.Tick += async (sender, args) => await CheckCloudLinkAsync();
@@ -270,13 +264,11 @@ namespace AeroHelm.GcsCloud
             {
                 foreach (var entry in _nativeAvailability)
                     entry.Key.Available = entry.Value;
-                foreach (var item in new ToolStripItem[] { _paths, _operations, _workspaces })
+                foreach (var item in new ToolStripItem[] { _paths, _operations, _workspaces, _camera })
                     if (item != null) main.MainMenu.Items.Remove(item);
             }
             _nativeAvailability.Clear();
-            _planSurvey?.Dispose();
-            _planSurvey = null;
-            foreach (ToolStripItem item in new ToolStripItem[] { _paths, _operations, _workspaces })
+            foreach (ToolStripItem item in new ToolStripItem[] { _paths, _operations, _workspaces, _camera })
             {
                 if (item == null) continue;
                 if (item.Image != null)
@@ -290,6 +282,7 @@ namespace AeroHelm.GcsCloud
             _paths = null;
             _operations = null;
             _workspaces = null;
+            _camera = null;
             return true;
         }
     }
