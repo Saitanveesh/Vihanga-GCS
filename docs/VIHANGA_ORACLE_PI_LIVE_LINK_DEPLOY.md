@@ -170,7 +170,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-VihangaG
     -OracleInstanceOcid 'REPLACE-WITH-ACTUAL-FULL-OCI-INSTANCE-OCID'
 ```
 
-Use **PATHS > Cloud telemetry** to sign in and select the native connection.
+Use **Connections → Cloud telemetry** to sign in and select the native connection.
 Verify DATA/Quick and actual ID30/33/74 packet rates, disconnection stale
 state, and the independently selected USB/radio backup.
 
