@@ -799,8 +799,8 @@ def test_stream_requests_are_local_disarmed_and_nonpersistent(tmp_path):
 def test_mission_item_requires_fresh_current_session():
     state = relay_module.LinkState(connected=True)
     asyncio.run(state.publish(frame(42, b"\x07", mav2=True)))
-    assert state.mission_sequence == 7
-    assert state.fresh(state.last_mission_current)
+    assert state.health("AH-HW-001")["mission_sequence"] == 7
+    state.last_mission_current -= relay_module.FRESH_SECONDS + 1
+    assert state.health("AH-HW-001")["mission_sequence"] is None
     state.clear_session()
-    assert state.mission_sequence is None
-    assert not state.fresh(state.last_mission_current)
+    assert state.health("AH-HW-001")["mission_sequence"] is None
