@@ -132,8 +132,7 @@ namespace AeroHelm.GcsCloud
                         window.ShowDialog(this);
                 };
                 bar.Controls.Add(scheduler);
-                SetColumns("Aircraft", "Link", "Sample age (s)", "Mode",
-                           "Armed", "Battery (%)", "GNSS", "Risk flags");
+                SetFleetColumns();
             }
             else if (section == "SECURITY")
             {
@@ -226,7 +225,8 @@ namespace AeroHelm.GcsCloud
             table.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
             table.CellClick += (s,e) => {
                 if (section == "FLEET" && e.RowIndex >= 0 &&
-                    table.Columns.Count == 8)
+                    table.Columns.Count > 0 && table.Columns[0].HeaderText == "Aircraft" &&
+                    table.Columns.Count > 1 && table.Columns[1].HeaderText == "Telemetry")
                 {
                     var cell = table.Rows[e.RowIndex].Cells[0].Value;
                     if (cell != null) vehicleId.Text = Convert.ToString(cell,CultureInfo.InvariantCulture);
@@ -310,6 +310,24 @@ namespace AeroHelm.GcsCloud
             button.Click += async (s,e) => await LoadAsync(operation);
             parent.Controls.Add(button);
             actions.Add(button);
+        }
+
+        private void SetFleetColumns()
+        {
+            SetColumns("Aircraft", "Telemetry", "Pilot", "Network", "Age (s)",
+                "Sim. mission", "Mode", "Armed", "Battery (%)", "GPS", "Alerts");
+        }
+
+        private static string NetworkCaption(object kind)
+        {
+            switch (kind as string)
+            {
+                case "wifi": return "Wi-Fi";
+                case "cellular": return "Cellular";
+                case "ethernet": return "Ethernet";
+                case "other": return "Other";
+                default: return "—";
+            }
         }
 
         private void SetColumns(params string[] captions)
@@ -431,6 +449,9 @@ namespace AeroHelm.GcsCloud
                 mapped.Add(new Dictionary<string,object> {
                     { "vehicle_id", id },
                     { "kind", kind },
+                    { "assigned_pilot", Value(row,"assigned_pilot") },
+                    { "active_virtual_mission", kind == "virtual" ? Value(row,"active_virtual_mission") : null },
+                    { "access_network", fresh ? Value(telemetry,"access_network") : null },
                     { "online", fresh },
                     { "last_sample_age_s", ageKnown ?
                         (object)Math.Round(age,1) : null },
@@ -487,10 +508,10 @@ namespace AeroHelm.GcsCloud
                     {"vehicle_id",id},
                     {"online",online},
                     {"last_sample_age_s",validTime ? (object)Math.Round(ageSeconds,1) : null},
-                    {"mode",Value(v,"mode")},
-                    {"armed",Value(v,"armed")},
-                    {"battery_pct",Value(v,"battery_pct")},
-                    {"satellites",Value(v,"satellites")},
+                    {"mode",online ? Value(v,"mode") : null},
+                    {"armed",online ? Value(v,"armed") : null},
+                    {"battery_pct",online ? Value(v,"battery_pct") : null},
+                    {"satellites",online ? Value(v,"satellites") : null},
                     {"risks",new object[]{"M1: risk/security data unavailable"}}
                 });
             }
@@ -501,6 +522,34 @@ namespace AeroHelm.GcsCloud
 
         // GET /api/v1/mavlink/health proves that the deployed M1 read-only
         // telemetry service answered; it does not prove attitude, KDC, or R2.
+        private static string PrivateRelayFleetSnapshot(string healthJson)
+        {
+            var decoder = new JavaScriptSerializer { MaxJsonLength = 131072 };
+            var health = AsObject(decoder.DeserializeObject(healthJson));
+            var aircraft = Value(health,"vehicle_id") as string;
+            if (string.IsNullOrEmpty(aircraft) ||
+                !Regex.IsMatch(aircraft,@"\A[A-Za-z0-9_-]{3,64}\z",RegexOptions.CultureInvariant))
+                throw new InvalidOperationException("The relay did not identify an aircraft.");
+
+            bool fresh = Value(health,"device_online") is bool connected && connected &&
+                Value(health,"fresh") is bool current && current;
+            double ageMilliseconds;
+            bool ageKnown = double.TryParse(
+                Convert.ToString(Value(health,"frame_age_ms"),CultureInfo.InvariantCulture),
+                NumberStyles.Float,CultureInfo.InvariantCulture,out ageMilliseconds) &&
+                !double.IsInfinity(ageMilliseconds) && ageMilliseconds >= 0;
+            var row = new Dictionary<string,object> {
+                { "vehicle_id", aircraft },
+                { "kind", "hardware" },
+                { "online", fresh },
+                { "last_sample_age_s", ageKnown ? (object)Math.Round(ageMilliseconds / 1000,1) : null },
+                { "risks", fresh ? null : new object[] { "Telemetry unavailable" } }
+            };
+            return decoder.Serialize(new Dictionary<string,object> {
+                { "vehicles", new[] { row } }
+            });
+        }
+
         private static string LegacyM1Capabilities(string healthJson)
         {
             var decoder=new JavaScriptSerializer();
@@ -657,6 +706,7 @@ namespace AeroHelm.GcsCloud
             try
             {
                 bool usedM1Registry = false;
+                bool usedPrivateRelay = false;
                 bool usedCloudControlPlane = false;
                 bool usedM1Capabilities = false;
                 bool usedR2Capabilities = false;
@@ -713,10 +763,22 @@ namespace AeroHelm.GcsCloud
                                 throw;
                             second.Dispose();
                         }
-                        var legacy = OperationsApi.Request("GET","api/v1/vehicles");
-                        var converted = LegacyFleetSnapshot(legacy);
-                        usedM1Registry = true;
-                        return converted;
+                        try
+                        {
+                            var legacy = OperationsApi.Request("GET","api/v1/vehicles");
+                            var converted = LegacyFleetSnapshot(legacy);
+                            usedM1Registry = true;
+                            return converted;
+                        }
+                        catch (WebException registryFailure)
+                        {
+                            if (!AeroHelmBackendProfile.IsRouteAbsent(registryFailure))
+                                throw;
+                            var health = OperationsApi.Request("GET","api/v1/mavlink/health");
+                            var converted = PrivateRelayFleetSnapshot(health);
+                            usedPrivateRelay = true;
+                            return converted;
+                        }
                     }
                 });
                 if (IsDisposed || Disposing) return;
@@ -744,7 +806,9 @@ namespace AeroHelm.GcsCloud
                         "This is not a live-attitude, KDC, or flight clearance check.";
                 state.Text = "OBSERVED  "  + DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss 'UTC'",
                     CultureInfo.InvariantCulture) +
-                    (usedM1Registry ?
+                    (usedPrivateRelay ?
+                        "  |  Private relay · one aircraft" :
+                     usedM1Registry ?
                         "  |  M1 REGISTRY ONLY; RISK/HISTORY UNAVAILABLE" :
                      usedM1Metrics ?
                         "  |  M1 REGISTRY COUNT; R2 ANALYTICS NOT DEPLOYED" :
@@ -871,8 +935,7 @@ namespace AeroHelm.GcsCloud
             }
             else if (operation == "fleet")
             {
-                SetColumns("Aircraft","Link","Sample age (s)","Mode","Armed",
-                           "Battery (%)","GNSS","Risk flags");
+                SetFleetColumns();
                 var vehicles = Array(Value(result,"vehicles"));
                 int online = 0;
                 foreach (var entry in vehicles)
@@ -882,25 +945,27 @@ namespace AeroHelm.GcsCloud
                     if (fresh) online++;
                     var kind = Convert.ToString(Value(v,"kind"),
                         CultureInfo.InvariantCulture);
-                    var link = !fresh ? "STALE / OFF" :
+                    var link = !fresh ? "Stale or unavailable" :
                         string.Equals(kind,"virtual",StringComparison.OrdinalIgnoreCase) ?
-                            "VIRTUAL / SIM" : "DEVICE REPORTED";
-                    var index = table.Rows.Add(Display(Value(v,"vehicle_id")),
-                        link,
-                        Display(Value(v,"last_sample_age_s")),Display(Value(v,"mode")),
-                        Display(Value(v,"armed")),Display(Value(v,"battery_pct")),
-                        Display(Value(v,"satellites")),Display(Value(v,"risks")));
+                            "Simulation" : "Live";
+                    var index = table.Rows.Add(Display(Value(v,"vehicle_id")),link,
+                        Display(Value(v,"assigned_pilot")),
+                        fresh ? NetworkCaption(Value(v,"access_network")) : "—",
+                        Display(Value(v,"last_sample_age_s")),
+                        Display(Value(v,"active_virtual_mission")),
+                        fresh ? Display(Value(v,"mode")) : "—",
+                        fresh ? Display(Value(v,"armed")) : "—",
+                        fresh ? Display(Value(v,"battery_pct")) : "—",
+                        fresh ? Display(Value(v,"satellites")) : "—",
+                        Display(Value(v,"risks")));
                     if (!fresh)
                         table.Rows[index].DefaultCellStyle.ForeColor =
                             Drawing.Color.FromArgb(244,176,151);
                 }
-                detail.Text = "Aircraft observed: " + vehicles.Length +
-                    Environment.NewLine + "Backend-reported fresh: " + online +
-                    Environment.NewLine + "Hardware telemetry is DEVICE REPORTED, not independently attested." +
-                    Environment.NewLine + "Virtual vehicles are simulations, not physical flights." +
-                    Environment.NewLine + "Physical flight control authorized: NO" +
-                    Environment.NewLine + "Fleet freshness comes from the server clock and sample age." +
-                    Environment.NewLine + "Select an aircraft row to inspect its advisory risk flags.";
+                detail.Text = vehicles.Length == 0 ? "No aircraft found." :
+                    online + " of " + vehicles.Length + " aircraft with current telemetry.";
+                if (vehicles.Length > 0)
+                    detail.Text += Environment.NewLine + "Select an aircraft to view its alerts.";
             }
             else if (operation == "cloudMetrics")
             {
