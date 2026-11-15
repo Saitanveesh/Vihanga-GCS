@@ -303,17 +303,50 @@ namespace AeroHelm.GcsCloud
                 FlowDirection = FlowDirection.TopDown, WrapContents = false
             };
             page.Controls.Add(layout);
-            layout.Controls.Add(new Label {
-                Text = "For continuous telemetry, open Flight Data.",
-                AutoSize = true
-            });
-            var refresh = new Button { Text = "Refresh telemetry", AutoSize = true };
-            var summary = new Label { Text = "No telemetry checked yet.", AutoSize = true };
+            var refresh = new Button { Text = "Refresh Telemetry", AutoSize = true };
+            var notice = new Label { Text = "Sign in to view cloud telemetry.", AutoSize = true };
+            var readings = new TableLayoutPanel {
+                AutoSize = true, ColumnCount = 2, Margin = new Padding(0, 8, 0, 8)
+            };
+            readings.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            readings.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+            var fields = new[] {
+                "Aircraft", "Cloud Link", "Telemetry", "Heartbeat", "Attitude", "Mission Item", "Last Telemetry"
+            };
+            var values = new Label[fields.Length];
+            for (var row = 0; row < fields.Length; row++)
+            {
+                readings.Controls.Add(new Label {
+                    Text = fields[row], AutoSize = true, Margin = new Padding(0, 4, 24, 4)
+                }, 0, row);
+                values[row] = new Label { Text = "Unavailable", AutoSize = true };
+                readings.Controls.Add(values[row], 1, row);
+            }
             layout.Controls.Add(refresh);
-            layout.Controls.Add(summary);
-            refresh.Click += async (sender, args) => {
+            layout.Controls.Add(notice);
+            layout.Controls.Add(readings);
+
+            var poll = new Timer { Interval = 3000 };
+            void ClearTelemetry(string message)
+            {
+                notice.Text = message;
+                foreach (var value in values)
+                    value.Text = "Unavailable";
+            }
+
+            async Task FetchTelemetry()
+            {
+                if (!refresh.Enabled || page.IsDisposed)
+                    return;
+                var token = Program.AeroHelmOperatorToken;
+                var origin = Program.AeroHelmCloudOrigin;
+                if (string.IsNullOrEmpty(token) || DateTime.UtcNow >= Program.AeroHelmTokenExpiresUtc)
+                {
+                    ClearTelemetry("Sign in to view cloud telemetry.");
+                    return;
+                }
                 refresh.Enabled = false;
-                summary.Text = "Fetching telemetry...";
                 try
                 {
                     var snapshot = await Task.Run(() => {
@@ -322,30 +355,54 @@ namespace AeroHelm.GcsCloud
                     });
                     if (page.IsDisposed)
                         return;
+                    if (token != Program.AeroHelmOperatorToken || origin != Program.AeroHelmCloudOrigin ||
+                        DateTime.UtcNow >= Program.AeroHelmTokenExpiresUtc)
+                    {
+                        ClearTelemetry("Cloud session changed.");
+                        return;
+                    }
                     if (snapshot == null || !snapshot.TryGetValue("vehicle_id", out var aircraft) ||
                         string.IsNullOrWhiteSpace(aircraft as string))
                         throw new InvalidDataException("The relay did not identify an aircraft.");
 
-                    summary.Text = "Aircraft: " + aircraft + "\r\n" +
-                        "Device link: " + DescribeFlag(snapshot, "device_online", "Connected", "Disconnected") + "\r\n" +
-                        "Telemetry: " + DescribeFlag(snapshot, "fresh", "Fresh", "Stale or unavailable") + "\r\n" +
-                        "Heartbeat: " + DescribeFlag(snapshot, "native_hud_heartbeat_ready", "Fresh", "Stale or unavailable") + "\r\n" +
-                        "Attitude: " + DescribeFlag(snapshot, "attitude_stream_active", "Fresh", "Stale or unavailable") + "\r\n" +
-                        "Mission item: " + (snapshot.TryGetValue("mission_sequence", out var sequence) &&
-                            sequence != null ? Convert.ToString(sequence, CultureInfo.InvariantCulture) : "Unavailable") + "\r\n" +
-                        "Observed UTC: " + DateTime.UtcNow.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+                    values[0].Text = (string)aircraft;
+                    values[1].Text = DescribeFlag(snapshot, "device_online", "Connected", "Disconnected");
+                    values[2].Text = DescribeFlag(snapshot, "fresh", "Fresh", "Stale");
+                    values[3].Text = DescribeFlag(snapshot, "native_hud_heartbeat_ready", "Fresh", "Stale");
+                    values[4].Text = DescribeFlag(snapshot, "attitude_stream_active", "Fresh", "Stale");
+                    values[5].Text = snapshot.TryGetValue("mission_sequence", out var sequence) &&
+                        sequence != null ? Convert.ToString(sequence, CultureInfo.InvariantCulture) : "Unavailable";
+                    if ((!snapshot.TryGetValue("last_observed_frame_age_ms", out var age) || age == null) &&
+                        !snapshot.TryGetValue("frame_age_ms", out age))
+                        age = null;
+                    values[6].Text = age == null ? "Unavailable" :
+                        (Convert.ToDouble(age, CultureInfo.InvariantCulture) / 1000).ToString("0.0", CultureInfo.InvariantCulture) + " s ago";
+                    notice.Text = "Updated at " + DateTime.Now.ToString("T", CultureInfo.CurrentCulture);
                 }
-                catch (Exception error) when (error is WebException || IsRecordError(error))
+                catch (Exception error) when (error is WebException || IsRecordError(error) ||
+                    error is FormatException || error is InvalidCastException || error is OverflowException)
                 {
                     if (!page.IsDisposed)
-                        summary.Text = "Telemetry unavailable. " + error.Message;
+                        ClearTelemetry("Cloud telemetry unavailable.");
                 }
                 finally
                 {
                     if (!page.IsDisposed)
                         refresh.Enabled = true;
                 }
+            }
+            refresh.Click += async (sender, args) => await FetchTelemetry();
+            poll.Tick += async (sender, args) => await FetchTelemetry();
+            page.VisibleChanged += async (sender, args) => {
+                if (page.Visible)
+                {
+                    poll.Start();
+                    await FetchTelemetry();
+                }
+                else
+                    poll.Stop();
             };
+            page.Disposed += (sender, args) => poll.Dispose();
             return page;
         }
 
@@ -367,21 +424,32 @@ namespace AeroHelm.GcsCloud
             layout.Controls.Add(list);
         }
 
-        public AeroHelmOpsWindow()
+        public AeroHelmOpsWindow(bool toolsOnly = false)
         {
-            Text="Vihanga Operations";
+            Text = toolsOnly ? "Operations Tools" : "Operations";
             StartPosition=FormStartPosition.CenterParent;
             Width=860;Height=730;
             MinimumSize=new Drawing.Size(560,460);
             var tabs=new TabControl{Dock=DockStyle.Fill};
+            Controls.Add(tabs);
+            BackColor=Drawing.Color.FromArgb(8,8,8);
+            ForeColor=Drawing.Color.White;
+            AutoScaleMode=AutoScaleMode.Dpi;
+            KeyPreview=true;
+            KeyDown+=(s,e)=>{if(e.KeyCode==Keys.Escape){Close();e.Handled=true;}};
+            if (!toolsOnly)
+            {
+                tabs.TabPages.Add(CreateFlightStatus());
+                tabs.TabPages.Add(CreateFlightChecklist());
+                ApplyDarkTheme(this);
+                return;
+            }
+
             var simulation=new TabPage("Simulator");
             var maintenance=new TabPage("Bench maintenance");
             var policy=new TabPage("Cloud Status");
-            tabs.TabPages.Add(CreateFlightChecklist());
-            tabs.TabPages.Add(CreateFlightStatus());
             tabs.TabPages.Add(simulation);tabs.TabPages.Add(maintenance);
             tabs.TabPages.Add(policy);
-            Controls.Add(tabs);
             status.Dock=DockStyle.Bottom;status.Height=140;status.Multiline=true;
             status.ScrollBars=ScrollBars.Vertical;status.ReadOnly=true;
             status.Text="Sign in to check cloud status.";
@@ -550,11 +618,6 @@ namespace AeroHelm.GcsCloud
                 panel.Controls.Add(home);
                 panel.Controls.SetChildIndex(home,0);
             }
-            BackColor=Drawing.Color.FromArgb(8,8,8);
-            ForeColor=Drawing.Color.White;
-            AutoScaleMode=AutoScaleMode.Dpi;
-            KeyPreview=true;
-            KeyDown+=(s,e)=>{if(e.KeyCode==Keys.Escape){Close();e.Handled=true;}};
             ApplyDarkTheme(this);
             VihangaAdaptivePanel.Attach(this,sim,maint,policyPage);
         }
