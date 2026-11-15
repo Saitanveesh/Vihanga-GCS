@@ -201,7 +201,7 @@ Require-Text $workspace 'ProbeDuplexAsync("ping")' 'LINK must expose authenticat
 Require-Text $workspace 'ProbeDuplexAsync("uplink_status")' 'LINK must expose bounded Pi uplink counters.'
 Require-Text $workspace 'RequireAuthenticatedOrigin()' 'Duplex must never forward a JWT to arbitrary LINK origin.'
 Require-Text $workspace 'api/v1/network/requests' 'Duplex requires authenticated request/ack contracts.'
-Require-Text $workspace 'Flight commands remain blocked.' 'Diagnostic path must not claim aircraft control.'
+Require-Text $workspace 'Disarmed telemetry requests only; flight commands disabled' 'Diagnostic path must not claim aircraft control.'
 
 Require-Text $latestLauncher 'merge --ff-only' 'Latest GCS updater must not force-reset tracked code.'
 Require-Text $latestLauncher 'StopVerifiedLegacyBridge' 'Port recovery must require explicit verified-bridge opt-in.'
