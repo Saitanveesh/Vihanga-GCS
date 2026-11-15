@@ -122,6 +122,68 @@ namespace AeroHelm.GcsCloud
                                    distance / o.CruiseMetresPerSecond);
         }
 
+        public static SurveyDraft GenerateCorridor(double startLatitude, double startLongitude,
+            double endLatitude, double endLongitude, double widthMetres, double spacingMetres,
+            double relativeAltitudeMetres, double cruiseMetresPerSecond)
+        {
+            if (new[] { startLatitude, startLongitude, endLatitude, endLongitude, widthMetres,
+                spacingMetres, relativeAltitudeMetres, cruiseMetresPerSecond }.Any(value => !Finite(value)))
+                throw new ArgumentException("Enter finite values for all corridor settings.");
+            if (Math.Abs(startLatitude) >= 85 || Math.Abs(endLatitude) >= 85 ||
+                Math.Abs(startLongitude) > 180 || Math.Abs(endLongitude) > 180 ||
+                Math.Abs(endLongitude - startLongitude) > 180)
+                throw new ArgumentException("Use coordinates within 85° latitude and 180° longitude. Split routes at the date line.");
+            if (widthMetres < 5 || widthMetres > 500 || spacingMetres < 5 || spacingMetres > 300 ||
+                relativeAltitudeMetres < 5 || relativeAltitudeMetres > 120 ||
+                cruiseMetresPerSecond < 0.5 || cruiseMetresPerSecond > 15)
+                throw new ArgumentException("Use a width of 5–500 m, spacing of 5–300 m, relative altitude of 5–120 m, and speed of 0.5–15 m/s.");
+
+            // Use a local tangent-plane approximation over the bounded route.
+            double latitudeScale = EarthRadiusMetres * Math.PI / 180.0;
+            double longitudeScale = latitudeScale * Math.Cos(Radians((startLatitude + endLatitude) / 2));
+            double north = (endLatitude - startLatitude) * latitudeScale;
+            double east = (endLongitude - startLongitude) * longitudeScale;
+            double length = Math.Sqrt(north * north + east * east);
+            if (length < 1 || length > MaxSpanMetres)
+                throw new ArgumentException("Use a centerline between 1 m and 5 km long.");
+
+            int passes = (int)Math.Ceiling(widthMetres / spacingMetres) + 1;
+            if (passes * 2 > MaxPoints)
+                throw new ArgumentException("Increase spacing or reduce the width to stay within 120 waypoints.");
+
+            var points = new List<SurveyPoint>(passes * 2);
+            for (int pass = 0; pass < passes; pass++)
+            {
+                double offset = widthMetres * ((double)pass / (passes - 1) - 0.5);
+                double latitudeOffset = east / length * offset / latitudeScale;
+                double longitudeOffset = -north / length * offset / longitudeScale;
+                for (int endpoint = 0; endpoint < 2; endpoint++)
+                {
+                    bool atStart = (pass + endpoint) % 2 == 0;
+                    double latitude = (atStart ? startLatitude : endLatitude) + latitudeOffset;
+                    double longitude = (atStart ? startLongitude : endLongitude) + longitudeOffset;
+                    if (Math.Abs(latitude) >= 85 || Math.Abs(longitude) > 180)
+                        throw new ArgumentException("The selected width places a corridor pass outside the supported coordinate range.");
+                    points.Add(new SurveyPoint
+                    {
+                        Sequence = points.Count + 1,
+                        Latitude = latitude,
+                        Longitude = longitude,
+                        RelativeAltitudeMetres = relativeAltitudeMetres
+                    });
+                }
+            }
+
+            double distance = 0;
+            for (int index = 1; index < points.Count; index++)
+            {
+                var first = points[index - 1];
+                var second = points[index];
+                distance += DistanceMetres(first.Latitude, first.Longitude, second.Latitude, second.Longitude);
+            }
+            return new SurveyDraft(points.AsReadOnly(), distance, distance / cruiseMetresPerSecond);
+        }
+
         public static string ToQgcWpl110(SurveyDraft draft)
         {
             if (draft == null || draft.Points == null || draft.Points.Count < 2)
@@ -130,6 +192,7 @@ namespace AeroHelm.GcsCloud
             // Index 0 is a HOME PLACEHOLDER, not an executable takeoff command.
             // ArduPilot substitutes the vehicle's actual home on upload.
             var home = draft.Points[0];
+            if (home == null) throw new ArgumentException("Missing first waypoint.");
             b.AppendLine(string.Join("\t", new[] {
                 "0", "1", "0", "16", "0", "0", "0", "0",
                 home.Latitude.ToString("F7", CultureInfo.InvariantCulture),
@@ -138,6 +201,11 @@ namespace AeroHelm.GcsCloud
             for (int i = 0; i < draft.Points.Count; i++)
             {
                 var p = draft.Points[i];
+                if (p == null || !Finite(p.Latitude) || !Finite(p.Longitude) ||
+                    !Finite(p.RelativeAltitudeMetres) || Math.Abs(p.Latitude) > 90 ||
+                    Math.Abs(p.Longitude) > 180 || p.RelativeAltitudeMetres < 5 ||
+                    p.RelativeAltitudeMetres > 120)
+                    throw new ArgumentException("Invalid coordinates or relative altitude at waypoint " + (i + 1) + ".");
                 b.AppendLine(string.Join("\t", new[] {
                     (i+1).ToString(CultureInfo.InvariantCulture), "0", "3", "16",
                     "0", "0", "0", "0",

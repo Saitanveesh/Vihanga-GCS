@@ -37,10 +37,9 @@ def frame(message_id: int, payload: bytes, mav2: bool = False,
                         message_id & 255, message_id >> 8 & 255,
                         message_id >> 16 & 255)) if mav2 else bytearray(
                             (0xFE, len(payload), 1, source_system, 1, message_id))
-    assert message_id in (0, 22, 30)
+    crc_extra = {0: 50, 22: 220, 30: 39, 42: 28, 77: 143}[message_id]
     crc = 0xFFFF
-    for value in bytes(header[1:]) + payload + bytes((
-            {0: 50, 22: 220, 30: 39}[message_id],)):
+    for value in bytes(header[1:]) + payload + bytes((crc_extra,)):
         b = value ^ (crc & 255)
         b ^= b << 4 & 255
         crc = ((crc >> 8) ^ (b << 8) ^ (b << 3) ^ (b >> 4)) & 65535
@@ -614,10 +613,14 @@ def test_reconnect_expires_old_session_and_drops_stale_evidence(credentials):
                     break
                 time.sleep(0.01)
             assert link.frames == 1
-            link.last_heartbeat = time.monotonic() - 30
+            assert link.health(cfg.vehicle_id)["link_state"] == "live"
+            link.last_heartbeat = link.last_frame = time.monotonic() - 30
             assert not link.health(cfg.vehicle_id)["native_hud_heartbeat_ready"]
+            assert link.health(cfg.vehicle_id)["link_state"] == "stale"
         h = client.get("/api/v1/mavlink/health").json()
         assert not h["device_online"]
+        assert h["link_state"] == "offline"
+        assert h["last_observed_frame_age_ms"] >= 0
         assert not h["native_hud_heartbeat_ready"]
         assert not h["native_quick_data_ready"]
         assert not h["flight_data_streams"]["33"]["fresh"]
@@ -630,7 +633,11 @@ def test_reconnect_expires_old_session_and_drops_stale_evidence(credentials):
         with client.websocket_connect("/ws/mavlink/device/AH-HW-001",
               headers={"Authorization": "Bearer " + token}):
             assert app.state.link.health(cfg.vehicle_id)["real_heartbeat_frames"] == 0
-            assert app.state.link.health(cfg.vehicle_id)["epoch"] == 2
+            health = app.state.link.health(cfg.vehicle_id)
+            assert health["epoch"] == 2
+            assert health["link_state"] == "waiting_for_telemetry"
+            assert health["last_observed_frame_age_ms"] >= 0
+            assert health["frame_age_ms"] is None
 
 
 class Heartbeat:
@@ -795,3 +802,13 @@ def test_stream_requests_are_local_disarmed_and_nonpersistent(tmp_path):
     assert param_port.mav.commands == []
     assert request_parameter_snapshot_once(param_port, Heartbeat(), cfg_params)
     assert param_port.mav.commands == [("parameters", 1, 1)]
+
+
+def test_mission_item_requires_fresh_current_session():
+    state = relay_module.LinkState(connected=True)
+    asyncio.run(state.publish(frame(42, b"\x07", mav2=True)))
+    assert state.health("AH-HW-001")["mission_sequence"] == 7
+    state.last_mission_current -= relay_module.FRESH_SECONDS + 1
+    assert state.health("AH-HW-001")["mission_sequence"] is None
+    state.clear_session()
+    assert state.health("AH-HW-001")["mission_sequence"] is None

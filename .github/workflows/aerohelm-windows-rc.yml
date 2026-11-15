@@ -1,125 +1,129 @@
-name: AeroHelm Windows RC Validation (isolated)
+name: Vihanga Windows Installer Validation
 
-# This workflow lives on default branch solely to make native RC CI runnable.
-# It checks out the current development branch and records the commit tested.
-# signs an installer, accesses aircraft, or uses production credentials.
 on:
   push:
-    branches:
-      - master
+    branches: [master, vihanga-platform-integration]
     paths:
       - ".github/workflows/aerohelm-windows-rc.yml"
+      - "scripts/**/*.ps1"
+      - "GCSViews/**"
+      - "MissionPlanner.csproj"
+      - ".gitmodules"
+      - "plugins/**"
+      - "Plugins/AeroHelmCloud/**"
+      - "Tools/AeroHelmSurveyTests/**"
+      - "services/vihanga_link/**"
+      - "cloud/**"
   workflow_dispatch:
+
+concurrency:
+  group: vihanga-windows-installer-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  windows-native-rc:
+  installer:
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feat/vihanga-phase3-native-toolbar' || github.ref == 'refs/heads/vihanga-platform-integration'
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
-      AEROHELM_DISPOSABLE_CI: "1"
       AEROHELM_CLOUD_READONLY: "1"
     steps:
-      - name: Check out current Windows development branch and submodules
+      - name: Check out the reviewed source revision
         uses: actions/checkout@v4
         with:
-          ref: feat/aerohelm-touch-console
+          ref: ${{ github.sha }}
           submodules: recursive
           persist-credentials: false
           fetch-depth: 1
 
-      - name: Record exact tested source commit
+      - name: Check source revision and empty runtime
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           $commit = (& git rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $commit -notmatch '^[a-f0-9]{40}
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-
-      - name: Check offline source contracts
-        shell: powershell
-        run: |
-          & .\scripts\Test-AeroHelmWindowsPages.ps1
-          if (-not $?) { exit 1 }
-
-      - name: Run offline survey geometry regression suite
-        shell: powershell
-        run: |
-          dotnet run --project Tools\AeroHelmSurveyTests\AeroHelmSurveyTests.csproj --configuration Release
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Build full Mission Planner Release solution with Visual Studio MSBuild
-        shell: powershell
-        run: |
-          & .\scripts\Build-AeroHelmGCS.ps1 -Target Solution
-          if (-not $?) { exit 1 }
-
-      - name: Compile AeroHelm plugin against actual Mission Planner assemblies
-        shell: powershell
-        run: |
-          & .\scripts\Build-AeroHelmGCS.ps1 -Target Plugin
-          if (-not $?) { exit 1 }
-
-      - name: Test DLL install and rollback with disposable CI fixture
-        shell: powershell
-        run: |
-          & .\scripts\Test-AeroHelmPluginRoundtrip.ps1
-          if (-not $?) { exit 1 }
-
-      - name: Declare scope of successful result
-        if: success()
-        shell: powershell
-        run: |
-          Write-Host "SOURCE + WINDOWS COMPILE + DISPOSABLE INSTALL/ROLLBACK: PASSED"
-          Write-Host "NOT TESTED: native GCS GUI loading/touch UX, cloud login, Pi/Pixhawk, physical flight, video or signed deployment."
-          Write-Host "DO NOT merge hardware actuation into master based on these results."
-) {
-            throw "Cannot identify GCS source commit."
+          if ($LASTEXITCODE -ne 0 -or $commit -ne $env:GITHUB_SHA) {
+            throw 'The checked-out revision differs from the event commit.'
           }
-          Write-Host "AeroHelm Windows development commit under test: $commit"
+          # The installer accepts reviewed named branches only. Attach the
+          # exact event commit to the runner's local branch before invoking it.
+          & git switch -C $env:GITHUB_REF_NAME
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not establish the local release branch.'
+          }
+          if (Test-Path -LiteralPath 'bin/Release/net461') {
+            throw 'This validation must start with an empty runtime.'
+          }
 
-      - name: Install supported .NET SDK (no secrets or cloud account)
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
 
-      - name: Check offline source contracts
+      - name: Run verified clean installation
         shell: powershell
         run: |
-          & .\scripts\Test-AeroHelmWindowsPages.ps1
-          if (-not $?) { exit 1 }
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path build-logs -Force | Out-Null
+          Start-Transcript -LiteralPath 'build-logs/clean-install.log' | Out-Null
+          try {
+            & ./scripts/Install-VihangaVerified.ps1 -Apply
+          } finally {
+            Stop-Transcript | Out-Null
+          }
+          $manifest = Get-Content -LiteralPath 'build-logs/aerohelm-consolidated-release.json' -Raw | ConvertFrom-Json
+          if ($manifest.git_commit -ne $env:GITHUB_SHA -or $manifest.complete_previous_runtime_backup) {
+            throw 'Clean installation did not produce evidence for the expected revision and empty runtime.'
+          }
+          "VIHANGA_BOOTSTRAP_EXE_SHA256=$($manifest.executable_sha256)" >> $env:GITHUB_ENV
+          "VIHANGA_BOOTSTRAP_PLUGIN_SHA256=$($manifest.plugin_sha256)" >> $env:GITHUB_ENV
 
-      - name: Run offline survey geometry regression suite
+      - name: Rebuild existing installation and verify the preserved runtime
         shell: powershell
         run: |
-          dotnet run --project Tools\AeroHelmSurveyTests\AeroHelmSurveyTests.csproj --configuration Release
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path build-logs -Force | Out-Null
+          Start-Transcript -LiteralPath 'build-logs/rebuild.log' | Out-Null
+          try {
+            & ./scripts/Install-VihangaVerified.ps1 -Apply
+          } finally {
+            Stop-Transcript | Out-Null
+          }
+          $manifest = Get-Content -LiteralPath 'build-logs/aerohelm-consolidated-release.json' -Raw | ConvertFrom-Json
+          if ($manifest.git_commit -ne $env:GITHUB_SHA -or -not $manifest.complete_previous_runtime_backup) {
+            throw 'Rebuild did not produce evidence for the expected revision and a preserved runtime.'
+          }
+          $backup = $manifest.complete_previous_runtime_backup
+          $exe = Join-Path $backup 'MissionPlanner.exe'
+          $plugin = Join-Path $backup 'plugins/AeroHelm.Cloud.Plugin.Validation.dll'
+          if ((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash -ne $env:VIHANGA_BOOTSTRAP_EXE_SHA256 -or
+              (Get-FileHash -LiteralPath $plugin -Algorithm SHA256).Hash -ne $env:VIHANGA_BOOTSTRAP_PLUGIN_SHA256) {
+            throw 'Preserved runtime differs from the verified clean installation.'
+          }
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value @"
+          Validated source commit: $($manifest.git_commit)
 
-      - name: Build full Mission Planner Release solution with Visual Studio MSBuild
-        shell: powershell
-        run: |
-          & .\scripts\Build-AeroHelmGCS.ps1 -Target Solution
-          if (-not $?) { exit 1 }
+          - Clean Windows installation and binary verification
+          - Existing Windows installation rebuild and binary verification
+          - Previous executable and plugin hash verification in the backup
 
-      - name: Compile AeroHelm plugin against actual Mission Planner assemblies
-        shell: powershell
-        run: |
-          & .\scripts\Build-AeroHelmGCS.ps1 -Target Plugin
-          if (-not $?) { exit 1 }
+          Run Windows UI and aircraft checks separately.
+          "@
 
-      - name: Test DLL install and rollback with disposable CI fixture
-        shell: powershell
-        run: |
-          & .\scripts\Test-AeroHelmPluginRoundtrip.ps1
-          if (-not $?) { exit 1 }
+      - name: Archive installer verification manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: vihanga-windows-installation-${{ github.sha }}
+          path: build-logs/aerohelm-consolidated-release.json
+          if-no-files-found: error
 
-      - name: Declare scope of successful result
-        if: success()
-        shell: powershell
-        run: |
-          Write-Host "SOURCE + WINDOWS COMPILE + DISPOSABLE INSTALL/ROLLBACK: PASSED"
-          Write-Host "NOT TESTED: native GCS GUI loading/touch UX, cloud login, Pi/Pixhawk, physical flight, video or signed deployment."
-          Write-Host "DO NOT merge hardware actuation into master based on these results."
+      - name: Archive build logs after a failed installation
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vihanga-windows-build-failure-${{ github.sha }}
+          path: |
+            build-logs/**/*.log
+            build-logs/**/*.binlog
+          if-no-files-found: ignore

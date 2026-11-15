@@ -72,6 +72,8 @@ namespace AeroHelm.GcsCloud
         private readonly NumericUpDown spacing = Number(5, 300, 30, 1);
         private readonly NumericUpDown altitude = Number(5, 120, 30, 1);
         private readonly NumericUpDown speed = Number(1, 15, 5, 1);
+        private readonly CheckBox corridor = new CheckBox { Text = "Corridor", AutoSize = true };
+        private readonly NumericUpDown corridorWidth = Number(5, 500, 50, 1);
         private readonly DataGridView grid = new DataGridView();
         private readonly Label status = new Label();
         private readonly Button export = new Button();
@@ -95,16 +97,18 @@ namespace AeroHelm.GcsCloud
             };
         }
 
-        private static void Add(FlowLayoutPanel panel, string name, Control control)
+        private static Label Add(FlowLayoutPanel panel, string name, Control control)
         {
-            panel.Controls.Add(new Label { Text = name, Width = 96,
-                TextAlign = Drawing.ContentAlignment.MiddleRight, Height = 25 });
+            var label = new Label { Text = name, Width = 96,
+                TextAlign = Drawing.ContentAlignment.MiddleRight, Height = 25 };
+            panel.Controls.Add(label);
             panel.Controls.Add(control);
+            return label;
         }
 
         public AeroHelmSurveyWindow()
         {
-            Text = "VIHANGA SURVEY — Offline autonomous mission draft";
+            Text = "Vihanga Survey";
             StartPosition = FormStartPosition.CenterParent;
             Width = 820;
             Height = 680;
@@ -116,14 +120,17 @@ namespace AeroHelm.GcsCloud
                 FlowDirection = FlowDirection.LeftToRight, WrapContents = true,
                 Padding = new Padding(8)
             };
-            Add(top, "North latitude", north);
-            Add(top, "South latitude", south);
-            Add(top, "West longitude", west);
-            Add(top, "East longitude", east);
-            Add(top, "Row spacing (m)", spacing);
+            top.Controls.Add(corridor);
+            var northLabel = Add(top, "North latitude", north);
+            var westLabel = Add(top, "West longitude", west);
+            var southLabel = Add(top, "South latitude", south);
+            var eastLabel = Add(top, "East longitude", east);
+            var widthLabel = Add(top, "Width (m)", corridorWidth);
+            corridorWidth.Enabled = widthLabel.Enabled = false;
+            Add(top, "Spacing (m)", spacing);
             Add(top, "Rel. altitude (m)", altitude);
             Add(top, "Speed (m/s)", speed);
-            var generate = new Button { Text = "Generate survey draft", Width = 175, Height = 30 };
+            var generate = new Button { Text = "Preview route", Width = 175, Height = 30 };
             export.Text = "Export .waypoints";
             export.Width = 145;
             export.Height = 30;
@@ -144,8 +151,7 @@ namespace AeroHelm.GcsCloud
             status.Dock = DockStyle.Bottom;
             status.Height = 88;
             status.Padding = new Padding(10);
-            status.Text = "OFFLINE ONLY: enter the site coordinates and generate a draft. No takeoff, RTL, landing, mission upload or cloud command is issued.\nReview home, terrain, airspace, geofence, obstacles, mission transitions and battery margins before any flight.";
-            status.ForeColor = Drawing.Color.DarkRed;
+            status.Text = "Enter the survey bounds or select Corridor to enter a centerline.";
 
             Controls.Add(grid);
             Controls.Add(status);
@@ -160,11 +166,20 @@ namespace AeroHelm.GcsCloud
                 draft = null;
                 export.Enabled = false;
                 grid.Rows.Clear();
-                status.Text = "Survey inputs changed. Regenerate and review the draft before export.\n" +
-                              "No commands or mission uploads are available from SURVEY.";
+                status.Text = "Inputs changed. Preview the route before export.";
             };
-            foreach (var input in new[] { north, south, east, west, spacing, altitude, speed })
+            foreach (var input in new[] { north, south, east, west, spacing, altitude, speed, corridorWidth })
                 input.ValueChanged += invalidate;
+            corridor.CheckedChanged += (sender, args) =>
+            {
+                bool enabled = corridor.Checked;
+                northLabel.Text = enabled ? "Start latitude" : "North latitude";
+                westLabel.Text = enabled ? "Start longitude" : "West longitude";
+                southLabel.Text = enabled ? "End latitude" : "South latitude";
+                eastLabel.Text = enabled ? "End longitude" : "East longitude";
+                corridorWidth.Enabled = widthLabel.Enabled = enabled;
+                invalidate(sender, args);
+            };
         }
 
         private void Generate()
@@ -174,7 +189,11 @@ namespace AeroHelm.GcsCloud
             grid.Rows.Clear();
             try
             {
-                draft = SurveyPlanner.Generate(new SurveyOptions
+                draft = corridor.Checked
+                    ? SurveyPlanner.GenerateCorridor((double)north.Value, (double)west.Value,
+                        (double)south.Value, (double)east.Value, (double)corridorWidth.Value,
+                        (double)spacing.Value, (double)altitude.Value, (double)speed.Value)
+                    : SurveyPlanner.Generate(new SurveyOptions
                 {
                     North = (double)north.Value, South = (double)south.Value,
                     West = (double)west.Value, East = (double)east.Value,
@@ -188,8 +207,8 @@ namespace AeroHelm.GcsCloud
                                   point.Longitude.ToString("F7", CultureInfo.InvariantCulture),
                                   point.RelativeAltitudeMetres.ToString("F1", CultureInfo.InvariantCulture));
                 status.Text = string.Format(CultureInfo.InvariantCulture,
-                    "DRAFT READY — {0} waypoints, {1:F1} km route, nominal travel {2:F1} min (no takeoff/landing time).\n" +
-                    "NOT UPLOADED. Mission Planner will overwrite placeholder home (row 0). Verify GPS, RTL, obstacles, airspace, terrain and battery before use.",
+                    "{0} waypoints, {1:F1} km, estimated travel {2:F1} min.\n" +
+                    "Review the route in Mission Planner and verify the home position and terrain.",
                     draft.Points.Count, draft.HorizontalDistanceMetres / 1000.0,
                     draft.NominalTravelSeconds / 60.0);
                 export.Enabled = true;
@@ -205,9 +224,9 @@ namespace AeroHelm.GcsCloud
             if (draft == null) return;
             using (var dialog = new SaveFileDialog
             {
-                Title = "Export OFFLINE waypoint draft (never uploaded)",
+                Title = "Export waypoint draft",
                 Filter = "Mission Planner waypoints (*.waypoints)|*.waypoints|Text (*.txt)|*.txt",
-                FileName = "aerohelm-survey-DRAFT.waypoints"
+                FileName = corridor.Checked ? "vihanga-corridor.waypoints" : "vihanga-survey.waypoints"
             })
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
@@ -215,9 +234,9 @@ namespace AeroHelm.GcsCloud
                 {
                     SurveyPlanner.SaveDraft(draft, dialog.FileName);
                     status.Text = "Exported draft to: " + dialog.FileName +
-                        "\nReview it in Mission Planner Flight Plan -> Load WP File. This tool does NOT upload, arm or start a mission.";
+                        "\nReview it in Mission Planner Flight Plan under Load WP File.";
                 }
-                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException)
                 {
                     status.Text = "Export failed: " + ex.Message;
                 }
@@ -236,7 +255,7 @@ namespace AeroHelm.GcsCloud
 
         public AeroHelmVisionWindow()
         {
-            Text = "VIHANGA VISION — Private cameras";
+            Text = "Vihanga Camera";
             Width = 760;
             Height = 405;
             MinimumSize = new Drawing.Size(620,360);
@@ -265,14 +284,14 @@ namespace AeroHelm.GcsCloud
             visionHeading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,75));
             visionHeading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,25));
             visionHeading.Controls.Add(new Label {
-                Text="VISION  /  PRIVATE CAMERA VIEWERS",
+                Text="Camera",
                 Dock=DockStyle.Fill,
                 Font=new Drawing.Font("Segoe UI Semibold",16,Drawing.FontStyle.Bold),
                 ForeColor=Drawing.Color.White,
                 TextAlign=Drawing.ContentAlignment.MiddleLeft
             },0,0);
             var visionHome = new Button {
-                Text = "← HOME", Dock = DockStyle.Fill,
+                Text = "Close", Dock = DockStyle.Fill,
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Drawing.Color.FromArgb(38,38,38),
                 ForeColor = Drawing.Color.White
@@ -283,7 +302,7 @@ namespace AeroHelm.GcsCloud
             layout.Controls.Add(visionHeading,0,0);
 
             camera.DropDownStyle=ComboBoxStyle.DropDownList;
-            camera.Items.AddRange(new object[] {"CAMERA 1 — Primary","CAMERA 2 — Optional"});
+            camera.Items.AddRange(new object[] {"Camera 1 (Primary)","Camera 2"});
             camera.SelectedIndex=0;
             camera.Dock=DockStyle.Fill;
             camera.BackColor=Drawing.Color.FromArgb(38,38,38);
@@ -298,8 +317,8 @@ namespace AeroHelm.GcsCloud
             url.AccessibleName="Selected camera private HTTPS address";
             layout.Controls.Add(url,0,2);
             var actions=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false,AutoScroll=true};
-            var open=new Button {Text="OPEN CAMERA IN BROWSER",Width=235,Height=42};
-            var save=new Button {Text="SAVE PRIVATE URL",Width=190,Height=42};
+            var open=new Button {Text="Open in Browser",Width=235,Height=42};
+            var save=new Button {Text="Save Address",Width=190,Height=42};
             foreach(var button in new[]{open,save})
             {
                 button.FlatStyle=FlatStyle.Flat;
@@ -318,9 +337,7 @@ namespace AeroHelm.GcsCloud
             layout.Controls.Add(saved,0,4);
             status.Dock=DockStyle.Fill;
             status.ForeColor=Drawing.Color.FromArgb(196,196,196);
-            status.Text="Streaming is hosted on the Raspberry Pi / private network, not Oracle."+
-                Environment.NewLine+"This page opens the actual private camera server; it does not simulate video."+
-                Environment.NewLine+"Camera 2 is not considered available until separately tested on hardware.";
+            status.Text="Enter the camera’s private network address to open its stream.";
             layout.Controls.Add(status,0,5);
             LoadCamera();
             // Reopening the VISION tile opens the known camera immediately.
@@ -366,9 +383,9 @@ namespace AeroHelm.GcsCloud
                 }
             }
             saved.Text = string.IsNullOrWhiteSpace(url.Text) ?
-                "Local configuration: NOT CONFIGURED" : suggested ?
-                "Private Camera 1 URL prefilled; live stream still unverified." :
-                "Local configuration: address on file (stream availability UNKNOWN)";
+                "No camera address saved." : suggested ?
+                "Camera 1 address loaded. Open the stream to check it." :
+                "Camera address saved.";
         }
 
         private Uri Validate()
@@ -388,7 +405,7 @@ namespace AeroHelm.GcsCloud
             {
                 var address=Validate();
                 AeroHelmWorkspaceSettings.Save(Key,address.AbsoluteUri);
-                saved.Text="Saved locally. Actual camera stream status remains UNKNOWN until verified.";
+                saved.Text="Camera address saved.";
                 return true;
             }
             catch(Exception ex) when(ex is ArgumentException || ex is IOException ||
@@ -408,9 +425,7 @@ namespace AeroHelm.GcsCloud
                 Process.Start(new ProcessStartInfo {
                     FileName=address.AbsoluteUri, UseShellExecute=true
                 });
-                status.Text="Opened selected private camera page in your browser."+
-                    Environment.NewLine+"No stream is assumed active until the Pi server responds."+
-                    Environment.NewLine+"Return here to select the other camera.";
+                status.Text="Camera page opened in your browser.";
             }
             catch(Exception ex) when(ex is System.ComponentModel.Win32Exception ||
                                       ex is InvalidOperationException || ex is ArgumentException)
@@ -469,7 +484,7 @@ namespace AeroHelm.GcsCloud
             freshness.TextAlign = Drawing.ContentAlignment.MiddleLeft;
             linkHeading.Controls.Add(freshness,0,0);
             var linkHome = new Button {
-                Text = "← HOME", Dock = DockStyle.Fill,
+                Text = "Close", Dock = DockStyle.Fill,
                 BackColor = Drawing.Color.FromArgb(38,38,38),
                 ForeColor = Drawing.Color.White,
                 FlatStyle = FlatStyle.Flat
@@ -498,7 +513,7 @@ namespace AeroHelm.GcsCloud
             autoRefresh.Margin = new Padding(12,11,0,0);
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, AutoScroll = true };
             buttons.Controls.Add(check);
-            requestTelemetry.Text = "Request real FC streams";
+            requestTelemetry.Text = "Request Telemetry";
             requestTelemetry.Width = 220;
             requestTelemetry.Height = 41;
             requestTelemetry.Visible = VihangaLinkSession.UsesDedicatedRelay;
@@ -538,7 +553,7 @@ namespace AeroHelm.GcsCloud
             duplexStatusQuery.Click += async (s,e) => await ProbeDuplexAsync("uplink_status");
             duplexStatus.Width = 330; duplexStatus.Height = 40;
             duplexStatus.TextAlign = Drawing.ContentAlignment.MiddleLeft;
-            duplexStatus.Text = "Pi diagnostics: not requested. Flight commands remain blocked.";
+            duplexStatus.Text = "No Pi diagnostics requested.";
             duplexStatus.ForeColor = Drawing.Color.FromArgb(220,210,186);
             duplexBar.Controls.Add(duplexStatus);
             duplexBar.Visible = false;
@@ -664,7 +679,7 @@ namespace AeroHelm.GcsCloud
                     authenticated.GetLeftPart(UriPartial.Authority),
                     StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(
-                    "Duplex requires the signed-in private cloud origin.");
+                    "Use the same relay address you signed in to.");
         }
 
         private async Task ProbeDuplexAsync(string action)
@@ -673,7 +688,7 @@ namespace AeroHelm.GcsCloud
             if (action != "ping" && action != "uplink_status") return;
             diagnosticPending = true;
             duplexPing.Enabled = duplexStatusQuery.Enabled = false;
-            duplexStatus.Text = "DUPLEX / awaiting Pi ACK";
+            duplexStatus.Text = "Waiting for the Pi...";
             try
             {
                 RequireAuthenticatedOrigin();
@@ -698,7 +713,7 @@ namespace AeroHelm.GcsCloud
                         if (state != "PENDING")
                         {
                             if (state != "ACK")
-                                return "DUPLEX / " + state + " — no trusted Pi result";
+                                return "No verified Pi reply. Status: " + state;
                             var details = report.ContainsKey("result") ?
                                 report["result"] as Dictionary<string,object> : null;
                             if (details == null)
@@ -712,9 +727,9 @@ namespace AeroHelm.GcsCloud
                                     !(bool)details["agent_alive"])
                                     throw new InvalidOperationException(
                                         "No positive Pi diagnostic acknowledgment.");
-                                return "DUPLEX / ACK — Pi online; round-trip " + rtt + " ms";
+                                return "Pi replied. Round-trip time: " + rtt + " ms";
                             }
-                            return "DUPLEX / ACK — RTT " + rtt + " ms; frames " +
+                            return "Pi replied. Round-trip time: " + rtt + " ms; frames " +
                                 Convert.ToString(details["frames_observed"],
                                     CultureInfo.InvariantCulture) +
                                 "; HB " + Convert.ToString(details["heartbeats_observed"],
@@ -728,12 +743,12 @@ namespace AeroHelm.GcsCloud
                         }
                         System.Threading.Thread.Sleep(250);
                     }
-                    return "DUPLEX / TIMED OUT — Pi did not ACK in the bounded window";
+                    return "Timed out waiting for the Pi.";
                 });
                 if (IsDisposed || Disposing) return;
                 lastDuplexResult = summary;
-                duplexStatus.Text = summary.StartsWith("DUPLEX / ACK",
-                    StringComparison.Ordinal) ? "DUPLEX / ACK VERIFIED" : "DUPLEX / NO ACK";
+                duplexStatus.Text = summary.StartsWith("Pi replied.",
+                    StringComparison.Ordinal) ? "Pi replied" : "No verified Pi reply";
                 ShowSelectedReport();
             }
             catch (Exception ex)
@@ -741,8 +756,8 @@ namespace AeroHelm.GcsCloud
                 if (IsDisposed || Disposing) return;
                 // Do not print an exception message containing an HTTP response,
                 // JWT, private device identity or user-supplied URL.
-                lastDuplexResult = "DUPLEX / unavailable: " + ex.GetType().Name;
-                duplexStatus.Text = "DUPLEX / UNAVAILABLE";
+                lastDuplexResult = "Pi diagnostics unavailable: " + ex.GetType().Name;
+                duplexStatus.Text = "Pi diagnostics unavailable";
                 ShowSelectedReport();
             }
             finally
@@ -779,9 +794,9 @@ namespace AeroHelm.GcsCloud
             if (checking || IsDisposed || Disposing) return;
             checking = true;
             check.Enabled = false;
-            freshness.Text = "LINK / CHECKING — no data confirmed";
+            freshness.Text = "Link | Checking";
             freshness.ForeColor = Drawing.Color.FromArgb(212,212,212);
-            output.Text = "Connecting to private AeroHelm Cloud...";
+            output.Text = "Checking the telemetry relay...";
             try
             {
                 var address = AeroHelmWorkspaceSettings.CheckedPrivateUrl(url.Text);

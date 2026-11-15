@@ -1,6 +1,7 @@
 """Hardware-free end-to-end Cloud Fleet Control Plane API regression tests."""
 from __future__ import annotations
 
+import json
 import time
 import uuid
 
@@ -303,8 +304,42 @@ def test_nonfinite_mission_inputs_fail_validation_not_server_error(client):
     make_two(client)
     bad = spec()
     bad["tasks"][0]["latitude"] = float("nan")
-    response = draft(client, plan=bad)
+    headers = {**jwt_header("author"), "Content-Type": "application/json"}
+    response = client.post("/api/v1/missions", headers=headers, content=json.dumps(bad))
     assert response.status_code == 422
     bad = spec()
     bad["tasks"][0]["required_energy_wh"] = float("inf")
-    assert draft(client, plan=bad).status_code == 422
+    response = client.post("/api/v1/missions", headers=headers, content=json.dumps(bad))
+    assert response.status_code == 422
+
+
+def test_fleet_assignment_is_tenant_scoped_and_requires_administrator(client):
+    make_two(client)
+    path = "/api/v1/vehicles/SIM-A/assignment"
+    assignment = {"pilot_subject": "pilot-a"}
+    assert client.put(path, headers=jwt_header(scopes="fleet:read"),
+                      json=assignment).status_code == 403
+    assert client.put(path, headers=jwt_header(tenant="TENANT-B"),
+                      json=assignment).status_code == 404
+    assert client.put(path, headers=jwt_header(), json=assignment).status_code == 200
+    rows = client.get("/api/v1/fleet/status", headers=jwt_header()).json()["vehicles"]
+    assert [row["assigned_pilot"] for row in rows] == ["pilot-a", None]
+    assert client.put(path, headers=jwt_header(),
+                      json={"pilot_subject": None}).json()["assigned_pilot"] is None
+
+
+def test_vehicle_mission_history_only_contains_its_assigned_missions(client):
+    make_two(client)
+    plan = spec(ids=["SIM-A"])
+    plan["tasks"] = plan["tasks"][:1]
+    mission = draft(client, plan=plan)
+    assert mission.status_code == 201
+    prefix = "/api/v1/vehicles/"
+    path = prefix + "SIM-A/mission-history"
+    history = client.get(path, headers=jwt_header()).json()
+    assert history["execution_target"] == "VIRTUAL_SIMULATOR_ONLY"
+    assert [row["id"] for row in history["missions"]] == [mission.json()["id"]]
+    assert client.get(path + "?offset=1", headers=jwt_header()).json()["missions"] == []
+    assert client.get(prefix + "SIM-B/mission-history",
+                      headers=jwt_header()).json()["missions"] == []
+    assert client.get(path, headers=jwt_header(tenant="TENANT-B")).status_code == 404

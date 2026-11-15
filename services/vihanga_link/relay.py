@@ -168,7 +168,7 @@ class LinkState:
     ping_count: int = 0
     ping_rtt_ms: int | None = None
     epoch: int = 0
-    viewers: set[asyncio.Queue[tuple[float, bytes]]] = field(default_factory=set)
+    viewers: set[asyncio.Queue[tuple[int, float, bytes]]] = field(default_factory=set)
     counters: Counter[int] = field(default_factory=Counter)
     last_message_by_id: dict[int, float] = field(default_factory=dict)
     recent_frames: deque[float] = field(default_factory=lambda: deque(maxlen=8192))
@@ -177,8 +177,11 @@ class LinkState:
     frames: int = 0
     rejected: int = 0
     last_frame: float = -1.0
+    last_observed_frame: float = -1.0
     last_heartbeat: float = -1.0
     last_attitude: float = -1.0
+    last_mission_current: float = -1.0
+    mission_sequence: int | None = None
     last_stream_ack_at: float = -1.0
     last_stream_ack_result: int | None = None
     stream_ack_frames: int = 0
@@ -205,6 +208,8 @@ class LinkState:
         self.ping_count = 0
         self.ping_rtt_ms = None
         self.last_frame = self.last_heartbeat = self.last_attitude = -1.0
+        self.last_mission_current = -1.0
+        self.mission_sequence = None
         self.last_stream_ack_at = -1.0
         self.last_stream_ack_result = None
         self.stream_ack_frames = 0
@@ -238,6 +243,7 @@ class LinkState:
         self.counters[msg_id] += 1
         self.last_message_by_id[msg_id] = now
         self.last_frame = now
+        self.last_observed_frame = now
         self.recent_frames.append(now)
         if msg_id == 0:
             self.last_heartbeat = now
@@ -245,6 +251,13 @@ class LinkState:
         if msg_id == 30:
             self.last_attitude = now
             self.recent_attitudes.append(now)
+        if msg_id == 42 and packet[1] >= 1:
+            header = 6 if packet[0] == 0xFE else 10
+            component = packet[4] if packet[0] == 0xFE else packet[6]
+            if component == 1 and (packet[0] == 0xFD or packet[1] >= 2):
+                sequence_bytes = packet[header:header + min(packet[1], 2)]
+                self.mission_sequence = int.from_bytes(sequence_bytes, "little")
+                self.last_mission_current = now
         if msg_id == 77 and packet[1] >= 3:
             # A real FC-generated COMMAND_ACK for the volatile stream probe.
             # This is not interchangeable with the Pi diagnostic JSON ACK.
@@ -270,7 +283,7 @@ class LinkState:
         for queue in tuple(self.viewers):
             if queue.full():
                 queue.get_nowait()  # Drop stale frames, never stall Pi uplink.
-            queue.put_nowait((now, packet))
+            queue.put_nowait((self.epoch, now, packet))
 
     async def request_stream_probe(self, vehicle_id: str) -> dict[str, Any]:
         """Authenticated, bounded diagnostic intent, NEVER arbitrary MAVLink."""
@@ -424,6 +437,18 @@ class LinkState:
 
     def health(self, vehicle_id: str) -> dict[str, Any]:
         now = time.monotonic()
+        fresh = self.fresh(self.last_frame)
+        if not self.connected:
+            link_state = "offline"
+        elif self.last_frame < 0:
+            link_state = "waiting_for_telemetry"
+        else:
+            link_state = "live" if fresh else "stale"
+        last_observed_age = (
+            max(0, int((now - self.last_observed_frame) * 1000))
+            if self.last_observed_frame >= 0 else None
+        )
+
         def age_ms(stamp: float) -> int | None:
             return max(0, int((now - stamp) * 1000)) if self.connected and stamp >= 0 else None
 
@@ -436,9 +461,12 @@ class LinkState:
             "mode": APP_MODE,
             "vehicle_id": vehicle_id,
             "device_online": self.connected,
-            "fresh": self.fresh(self.last_frame),
+            "fresh": fresh,
+            "link_state": link_state,
+            "last_observed_frame_age_ms": last_observed_age,
             "native_hud_heartbeat_ready": self.fresh(self.last_heartbeat),
             "attitude_stream_active": self.fresh(self.last_attitude),
+            "mission_sequence": (self.mission_sequence if self.fresh(self.last_mission_current) else None),
             "frames": self.frames,
             "real_heartbeat_frames": self.counters[0],
             "real_attitude_frames": self.counters[30],
@@ -676,7 +704,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         if vehicle_id != cfg.vehicle_id or not expiry:
             await ws.close(code=4401)
             return
-        queue: asyncio.Queue[tuple[float, bytes]] = asyncio.Queue(maxsize=32)
+        queue: asyncio.Queue[tuple[int, float, bytes]] = asyncio.Queue(maxsize=32)
         async with state.lock:
             state.viewers.add(queue)
         try:
@@ -700,8 +728,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                     if event.get("type") == "websocket.disconnect":
                         break
                 if next_frame in done and time.time() < expiry:
-                    received_at, packet = next_frame.result()
-                    if time.monotonic() - received_at <= 1.5:
+                    epoch, received_at, packet = next_frame.result()
+                    # A dequeued frame can survive the queue drain on disconnect.
+                    if (state.connected and epoch == state.epoch and
+                            time.monotonic() - received_at <= 1.5):
                         await ws.send_bytes(packet)
         except (WebSocketDisconnect, RuntimeError, OSError):
             pass

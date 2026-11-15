@@ -110,24 +110,353 @@ namespace AeroHelm.GcsCloud
         private bool busy;
         private bool renewing;
 
-        public AeroHelmOpsWindow()
+        public sealed class FlightRecord
         {
-            Text="VIHANGA — Operations | Simulator and Bench Maintenance";
+            public int Version { get; set; }
+            public string Aircraft { get; set; }
+            public string Mission { get; set; }
+            public string Notes { get; set; }
+            public string SavedUtc { get; set; }
+            public string[] ConfirmedPreFlight { get; set; }
+            public string[] ConfirmedPostFlight { get; set; }
+        }
+
+        private static TabPage CreateFlightChecklist()
+        {
+            var page = new TabPage("Flight record");
+            var layout = new FlowLayoutPanel {
+                Dock = DockStyle.Fill, Padding = new Padding(12), AutoScroll = true,
+                FlowDirection = FlowDirection.TopDown, WrapContents = false
+            };
+            page.Controls.Add(layout);
+
+            layout.Controls.Add(new Label { Text = "Aircraft ID", AutoSize = true });
+            var aircraft = new TextBox { Width = 460, MaxLength = 120 };
+            layout.Controls.Add(aircraft);
+            layout.Controls.Add(new Label { Text = "Mission reference", AutoSize = true });
+            var mission = new TextBox { Width = 460, MaxLength = 120 };
+            layout.Controls.Add(mission);
+
+            var checks = new Dictionary<string, CheckedListBox>();
+            AddChecklist(layout, checks, "Pre-flight", new[] {
+                "Aircraft and payload inspected",
+                "Battery condition and charge checked",
+                "Mission area, route and weather reviewed",
+                "Pilot control link and backup checked",
+                "Navigation status and home position confirmed",
+                "Recovery procedure reviewed with the crew"
+            });
+            AddChecklist(layout, checks, "Post-flight", new[] {
+                "Aircraft disarmed and secured",
+                "Aircraft and payload inspected",
+                "Battery condition recorded",
+                "Flight logs and issues recorded"
+            });
+
+            layout.Controls.Add(new Label { Text = "Pilot notes", AutoSize = true });
+            var notes = new TextBox {
+                Width = 460, Height = 80, MaxLength = 4000, Multiline = true,
+                ScrollBars = ScrollBars.Vertical
+            };
+            layout.Controls.Add(notes);
+            var actions = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
+            layout.Controls.Add(actions);
+            var open = new Button { Text = "Open record", AutoSize = true };
+            var save = new Button { Text = "Save record", AutoSize = true };
+            var result = new Label { AutoSize = true };
+            actions.Controls.Add(open);
+            actions.Controls.Add(save);
+            layout.Controls.Add(result);
+            const string filter = "Vihanga flight record (*.json)|*.json";
+
+            open.Click += (sender, args) => {
+                using (var dialog = new OpenFileDialog { Filter = filter, CheckFileExists = true })
+                {
+                    if (dialog.ShowDialog(page) != DialogResult.OK)
+                        return;
+
+                    if (MessageBox.Show(page, "Replace the current form with the selected record?",
+                        "Open record", MessageBoxButtons.OKCancel) != DialogResult.OK)
+                        return;
+
+                    try
+                    {
+                        var record = ReadFlightRecord(dialog.FileName);
+                        aircraft.Text = record.Aircraft;
+                        mission.Text = record.Mission;
+                        notes.Text = record.Notes;
+                        ApplyChecks(checks["Pre-flight"], record.ConfirmedPreFlight);
+                        ApplyChecks(checks["Post-flight"], record.ConfirmedPostFlight);
+                        result.Text = "Opened " + Path.GetFileName(dialog.FileName);
+                    }
+                    catch (Exception error) when (IsRecordError(error))
+                    {
+                        result.Text = "Could not open the record.";
+                        MessageBox.Show(page, error.Message);
+                    }
+                }
+            };
+
+            save.Click += (sender, args) => {
+                if (string.IsNullOrWhiteSpace(aircraft.Text) || string.IsNullOrWhiteSpace(mission.Text))
+                {
+                    result.Text = "Enter both the aircraft ID and mission reference.";
+                    return;
+                }
+
+                using (var dialog = new SaveFileDialog {
+                    Filter = filter, FileName = "Vihanga-flight-record.json", DefaultExt = "json",
+                    AddExtension = true, OverwritePrompt = true
+                })
+                {
+                    if (dialog.ShowDialog(page) != DialogResult.OK)
+                        return;
+
+                    var record = new FlightRecord {
+                        Version = 1, Aircraft = aircraft.Text.Trim(), Mission = mission.Text.Trim(),
+                        Notes = notes.Text, SavedUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+                        ConfirmedPreFlight = ReadChecks(checks["Pre-flight"]),
+                        ConfirmedPostFlight = ReadChecks(checks["Post-flight"])
+                    };
+
+                    try
+                    {
+                        WriteFlightRecord(dialog.FileName, record);
+                        result.Text = "Saved " + Path.GetFileName(dialog.FileName);
+                    }
+                    catch (Exception error) when (IsRecordError(error))
+                    {
+                        result.Text = "Could not save the record.";
+                        MessageBox.Show(page, error.Message);
+                    }
+                }
+            };
+            return page;
+        }
+
+        private static string[] ReadChecks(CheckedListBox list)
+        {
+            var result = new List<string>();
+            foreach (string item in list.CheckedItems)
+                result.Add(item);
+            return result.ToArray();
+        }
+
+        private static void ApplyChecks(CheckedListBox list, string[] checkedItems)
+        {
+            var confirmed = new HashSet<string>(checkedItems, StringComparer.Ordinal);
+            for (var index = 0; index < list.Items.Count; index++)
+                list.SetItemChecked(index, confirmed.Contains((string)list.Items[index]));
+        }
+
+        private static FlightRecord ReadFlightRecord(string path)
+        {
+            const int maxCharacters = 65536;
+            var buffer = new char[maxCharacters + 1];
+            int length;
+            using (var stream = new StreamReader(path, Encoding.UTF8))
+                length = stream.ReadBlock(buffer, 0, buffer.Length);
+
+            if (length > maxCharacters)
+                throw new InvalidDataException("The file is too large for a flight record.");
+
+            var serializer = new JavaScriptSerializer { MaxJsonLength = maxCharacters, RecursionLimit = 12 };
+            var record = serializer.Deserialize<FlightRecord>(new string(buffer, 0, length));
+            if (record == null || record.Version != 1 ||
+                string.IsNullOrWhiteSpace(record.Aircraft) || record.Aircraft.Length > 120 ||
+                string.IsNullOrWhiteSpace(record.Mission) || record.Mission.Length > 120 ||
+                record.Notes == null || record.Notes.Length > 4000 ||
+                record.ConfirmedPreFlight == null || record.ConfirmedPostFlight == null)
+                throw new InvalidDataException("The file does not contain a supported flight record.");
+            return record;
+        }
+
+        private static void WriteFlightRecord(string path, FlightRecord record)
+        {
+            var temporary = Path.Combine(Path.GetDirectoryName(path), Guid.NewGuid().ToString("N") + ".tmp");
+            try
+            {
+                File.WriteAllText(temporary, new JavaScriptSerializer().Serialize(record), Encoding.UTF8);
+                if (File.Exists(path))
+                    File.Replace(temporary, path, null);
+                else
+                    File.Move(temporary, path);
+            }
+            finally
+            {
+                if (File.Exists(temporary))
+                    File.Delete(temporary);
+            }
+        }
+
+        private static bool IsRecordError(Exception error)
+        {
+            return error is IOException || error is UnauthorizedAccessException ||
+                error is ArgumentException || error is InvalidOperationException;
+        }
+
+        private static TabPage CreateFlightStatus()
+        {
+            var page = new TabPage("Aircraft status");
+            var layout = new FlowLayoutPanel {
+                Dock = DockStyle.Fill, Padding = new Padding(12), AutoScroll = true,
+                FlowDirection = FlowDirection.TopDown, WrapContents = false
+            };
+            page.Controls.Add(layout);
+            var refresh = new Button { Text = "Refresh Telemetry", AutoSize = true };
+            var notice = new Label { Text = "Sign in to view cloud telemetry.", AutoSize = true };
+            var readings = new TableLayoutPanel {
+                AutoSize = true, ColumnCount = 2, Margin = new Padding(0, 8, 0, 8)
+            };
+            readings.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            readings.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+            var fields = new[] {
+                "Aircraft", "Cloud Link", "Telemetry", "Heartbeat", "Attitude", "Mission Item", "Last Telemetry"
+            };
+            var values = new Label[fields.Length];
+            for (var row = 0; row < fields.Length; row++)
+            {
+                readings.Controls.Add(new Label {
+                    Text = fields[row], AutoSize = true, Margin = new Padding(0, 4, 24, 4)
+                }, 0, row);
+                values[row] = new Label { Text = "Unavailable", AutoSize = true };
+                readings.Controls.Add(values[row], 1, row);
+            }
+            layout.Controls.Add(refresh);
+            layout.Controls.Add(notice);
+            layout.Controls.Add(readings);
+
+            var poll = new Timer { Interval = 3000 };
+            void ClearTelemetry(string message)
+            {
+                notice.Text = message;
+                foreach (var value in values)
+                    value.Text = "Unavailable";
+            }
+
+            async Task FetchTelemetry()
+            {
+                if (!refresh.Enabled || page.IsDisposed)
+                    return;
+                refresh.Enabled = false;
+                try
+                {
+                    var dedicated = VihangaLinkSession.UsesDedicatedRelay;
+                    var token = VihangaLinkSession.AccessToken;
+                    if (string.IsNullOrEmpty(token) || DateTime.UtcNow >= VihangaLinkSession.ExpiresUtc)
+                    {
+                        ClearTelemetry("Sign in to view cloud telemetry.");
+                        return;
+                    }
+                    var origin = VihangaLinkSession.CloudOrigin;
+                    var snapshot = await Task.Run(() => {
+                        var response = dedicated
+                            ? VihangaLinkSession.ReadRelayHealth()
+                            : OperationsApi.Request("GET", "api/v1/mavlink/health");
+                        return new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(response);
+                    });
+                    if (page.IsDisposed)
+                        return;
+                    if (dedicated != VihangaLinkSession.UsesDedicatedRelay ||
+                        token != VihangaLinkSession.AccessToken || origin != VihangaLinkSession.CloudOrigin ||
+                        DateTime.UtcNow >= VihangaLinkSession.ExpiresUtc)
+                    {
+                        ClearTelemetry("Cloud session changed.");
+                        return;
+                    }
+                    if (snapshot == null || !snapshot.TryGetValue("vehicle_id", out var aircraft) ||
+                        string.IsNullOrWhiteSpace(aircraft as string))
+                        throw new InvalidDataException("The relay did not identify an aircraft.");
+
+                    values[0].Text = (string)aircraft;
+                    values[1].Text = DescribeFlag(snapshot, "device_online", "Connected", "Disconnected");
+                    values[2].Text = DescribeFlag(snapshot, "fresh", "Fresh", "Stale");
+                    values[3].Text = DescribeFlag(snapshot, "native_hud_heartbeat_ready", "Fresh", "Stale");
+                    values[4].Text = DescribeFlag(snapshot, "attitude_stream_active", "Fresh", "Stale");
+                    values[5].Text = snapshot.TryGetValue("mission_sequence", out var sequence) &&
+                        sequence != null ? Convert.ToString(sequence, CultureInfo.InvariantCulture) : "Unavailable";
+                    if ((!snapshot.TryGetValue("last_observed_frame_age_ms", out var age) || age == null) &&
+                        !snapshot.TryGetValue("frame_age_ms", out age))
+                        age = null;
+                    values[6].Text = age == null ? "Unavailable" :
+                        (Convert.ToDouble(age, CultureInfo.InvariantCulture) / 1000).ToString("0.0", CultureInfo.InvariantCulture) + " s ago";
+                    notice.Text = "Updated at " + DateTime.Now.ToString("T", CultureInfo.CurrentCulture);
+                }
+                catch (Exception error) when (error is WebException || IsRecordError(error) ||
+                    error is FormatException || error is InvalidCastException || error is OverflowException)
+                {
+                    if (!page.IsDisposed)
+                        ClearTelemetry("Cloud telemetry unavailable.");
+                }
+                finally
+                {
+                    if (!page.IsDisposed)
+                        refresh.Enabled = true;
+                }
+            }
+            refresh.Click += async (sender, args) => await FetchTelemetry();
+            poll.Tick += async (sender, args) => await FetchTelemetry();
+            page.VisibleChanged += async (sender, args) => {
+                if (page.Visible)
+                {
+                    poll.Start();
+                    await FetchTelemetry();
+                }
+                else
+                    poll.Stop();
+            };
+            page.Disposed += (sender, args) => poll.Dispose();
+            return page;
+        }
+
+        private static string DescribeFlag(Dictionary<string, object> values, string key, string yes, string no)
+        {
+            if (!values.TryGetValue(key, out var value) || !(value is bool flag))
+                return "Unavailable";
+            return flag ? yes : no;
+        }
+
+        private static void AddChecklist(FlowLayoutPanel layout,
+            Dictionary<string, CheckedListBox> checks, string title, string[] entries)
+        {
+            layout.Controls.Add(new Label { Text = title, AutoSize = true });
+            var list = new CheckedListBox { Width = 460, CheckOnClick = true };
+            list.Items.AddRange(entries);
+            list.Height = list.ItemHeight * entries.Length + SystemInformation.BorderSize.Height * 2 + 2;
+            checks.Add(title, list);
+            layout.Controls.Add(list);
+        }
+
+        public AeroHelmOpsWindow(bool toolsOnly = false)
+        {
+            Text = toolsOnly ? "Operations Tools" : "Operations";
             StartPosition=FormStartPosition.CenterParent;
             Width=860;Height=730;
             MinimumSize=new Drawing.Size(560,460);
             var tabs=new TabControl{Dock=DockStyle.Fill};
-            var simulation=new TabPage("AUTONOMY — SIMULATION ONLY");
-            var maintenance=new TabPage("MAINTENANCE — PHYSICAL APPROVAL");
-            var policy=new TabPage("CAPABILITIES — READ ONLY");
+            Controls.Add(tabs);
+            BackColor=Drawing.Color.FromArgb(8,8,8);
+            ForeColor=Drawing.Color.White;
+            AutoScaleMode=AutoScaleMode.Dpi;
+            KeyPreview=true;
+            KeyDown+=(s,e)=>{if(e.KeyCode==Keys.Escape){Close();e.Handled=true;}};
+            if (!toolsOnly)
+            {
+                tabs.TabPages.Add(CreateFlightStatus());
+                tabs.TabPages.Add(CreateFlightChecklist());
+                ApplyDarkTheme(this);
+                return;
+            }
+
+            var simulation=new TabPage("Simulator");
+            var maintenance=new TabPage("Bench maintenance");
+            var policy=new TabPage("Cloud Status");
             tabs.TabPages.Add(simulation);tabs.TabPages.Add(maintenance);
             tabs.TabPages.Add(policy);
-            Controls.Add(tabs);
             status.Dock=DockStyle.Bottom;status.Height=140;status.Multiline=true;
             status.ScrollBars=ScrollBars.Vertical;status.ReadOnly=true;
-            status.Text="No commands sent. Cloud operations require an authenticated login. " +
-                "Hardware autonomous flight is blocked; supervised calibration requires " +
-                "independent local Pi approval.";
+            status.Text="Sign in to check cloud status.";
             Controls.Add(status);
             leaseRenewal.Interval=10000; // 30-second lease; renew every 10 seconds
             leaseRenewal.Tick+=async(s,e)=>await RenewSimulationLease();
@@ -135,49 +464,46 @@ namespace AeroHelm.GcsCloud
             var sim=new FlowLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(12),
                 AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false};
             simulation.Controls.Add(sim);
-            sim.Controls.Add(new Label{Text="Paste 2-80 waypoint rows: latitude,longitude,relative_altitude_m",
+            sim.Controls.Add(new Label{Text="Paste 2–80 waypoints in this order: latitude, longitude, relative altitude (m).",
                 Width=690,Height=25});
             missionText.Multiline=true;missionText.Width=680;missionText.Height=150;
             missionText.ScrollBars=ScrollBars.Vertical;
             sim.Controls.Add(missionText);
-            var load=new Button{Text="Load SURVEY .waypoints draft",Width=255};
+            var load=new Button{Text="Load WP File",Width=255};
             load.Click+=(s,e)=>LoadSurveyFile();
             sim.Controls.Add(load);
-            var draft=new Button{Text="Create simulated mission draft",Width=255};
+            var draft=new Button{Text="Create Mission Draft",Width=255};
             draft.Click+=async(s,e)=>await CreateDraft();
             sim.Controls.Add(draft);
-            sim.Controls.Add(new Label{Text="Mission ID (generated draft)",Width=680});
+            sim.Controls.Add(new Label{Text="Mission ID",Width=680});
             missionId.Width=680;missionId.ReadOnly=true;sim.Controls.Add(missionId);
-            var lease=new Button{Text="Acquire simulation control lease",Width=255};
+            var lease=new Button{Text="Request Simulator Control",Width=255};
             lease.Click+=async(s,e)=>await AcquireLease();
             sim.Controls.Add(lease);
-            sim.Controls.Add(new Label{Text="Simulation lease ID (memory only; clear when window closes)",Width=680});
+            sim.Controls.Add(new Label{Text="Control Lease ID",Width=680});
             leaseId.ReadOnly=true;leaseId.Width=680;sim.Controls.Add(leaseId);
-            start.Text="START simulation only";start.Width=255;
-            abort.Text="ABORT simulation";abort.Width=255;
+            start.Text="Start Simulation";start.Width=255;
+            abort.Text="Abort Simulation";abort.Width=255;
             start.Click+=async(s,e)=>await MissionAction("start");
             abort.Click+=async(s,e)=>await MissionAction("abort");
             sim.Controls.Add(start);sim.Controls.Add(abort);
-            var pause = new Button{Text="PAUSE simulation",Width=255};
+            var pause = new Button{Text="Pause Simulation",Width=255};
             pause.Click+=async(s,e)=>await MissionAction("pause");
             sim.Controls.Add(pause);
-            var resume = new Button{Text="RESUME simulation",Width=255};
+            var resume = new Button{Text="Resume Simulation",Width=255};
             resume.Click+=async(s,e)=>await MissionAction("resume");
             sim.Controls.Add(resume);
             var refresh = new Button{Text="Refresh mission progress",Width=255};
             refresh.Click+=async(s,e)=>await RefreshMission();
             sim.Controls.Add(refresh);
             sim.Controls.Add(new Label{Width=680,Height=55,
-                Text="AeroHelm production Oracle VM has simulation OFF. Use a dedicated SITL/simulation API instance. " +
-                     "Neither these controls nor the waypoint draft can command a real Pixhawk."});
+                Text="Connect to a server with simulation enabled."});
 
             var maint=new FlowLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(12),
                 AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false};
             maintenance.Controls.Add(maint);
             maint.Controls.Add(new Label{Width=680,Height=65,
-                Text="Select one allowed Pixhawk sensor calibration. Hardware must be DISARMED, " +
-                     "all propellers removed, and an on-site person must approve the exact request " +
-                     "locally at the Pi within 45 seconds. No flight commands are available."});
+                Text="Disarm the Pixhawk and remove all propellers. A technician must approve the calibration on the Pi within 45 seconds."});
             kind.DropDownStyle=ComboBoxStyle.DropDownList;
             kind.Items.AddRange(new object[]{"GYRO","BAROMETER","ACCEL_SIMPLE"});
             kind.SelectedIndex=0;kind.Width=250;maint.Controls.Add(kind);
@@ -185,16 +511,16 @@ namespace AeroHelm.GcsCloud
             onsite.Width=500;maint.Controls.Add(onsite);
             props.Text="I confirm all propellers are removed and Pixhawk is disarmed";
             props.Width=550;maint.Controls.Add(props);
-            cal.Text="Request supervised calibration";cal.Width=260;
+            cal.Text="Request Calibration";cal.Width=260;
             cal.Click+=async(s,e)=>await Calibrate();
             maint.Controls.Add(cal);
-            var checkCal = new Button{Text="Refresh calibration result",Width=260};
+            var checkCal = new Button{Text="Check Calibration",Width=260};
             checkCal.Click+=async(s,e)=>await RefreshCalibration();
             maint.Controls.Add(checkCal);
             maint.Controls.Add(new Label{Width=650,Height=90,
-                Text="After requesting, the local Pi operator must run:\n" +
+                Text="To approve the request, run this on the aircraft’s Pi:\n" +
                     "agent/.venv/bin/python -m agent.supervised_calibration <request-uuid>\n" +
-                    "The remote API alone cannot approve the physical calibration."});
+                    "Use the request ID shown below."});
 
             // Read-only policy overview is suitable for checking the cloud
             // before any later Pi/hardware acceptance. Never grants a lease.
@@ -204,18 +530,18 @@ namespace AeroHelm.GcsCloud
             };
             policy.Controls.Add(policyPage);
             policyPage.Controls.Add(new Label {
-                Text="Cloud capabilities are declarations, NOT a physical flight-clearance.",
+                Text="Cloud status is read-only.",
                 Width=680,Height=44
             });
             var capabilityReport=new TextBox {
                 Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,
                 Width=680,Height=260,
-                Text="No authenticated policy response has been requested."
+                Text="No cloud status checked yet."
             };
-            var refreshPolicy=new Button {Text="Refresh read-only cloud capabilities",Width=310};
+            var refreshPolicy=new Button {Text="Refresh Cloud Status",Width=310};
             refreshPolicy.Click+=async(s,e)=>{
                 refreshPolicy.Enabled=false;
-                capabilityReport.Text="Retrieving authenticated operations policy...";
+                capabilityReport.Text="Checking cloud status...";
                 try
                 {
                     capabilityReport.Text=await Api("GET","api/v1/operations/capabilities");
@@ -247,17 +573,17 @@ namespace AeroHelm.GcsCloud
             // The newer fleet service has a different, virtual-only API.
             // These GET actions do not create leases, missions or device jobs.
             var cloudR2Capabilities=new Button {
-                Text="Inspect fleet service capabilities (read-only)",Width=350
+                Text="Fleet Service Status",Width=350
             };
             cloudR2Capabilities.Click+=async(s,e)=>{
                 cloudR2Capabilities.Enabled=false;
                 try
                 {
-                    capabilityReport.Text="Cloud fleet service capabilities (reported):"+
+                    capabilityReport.Text="Fleet service capabilities:"+
                         Environment.NewLine+
                         await Api("GET","api/v1/capabilities")+
                         Environment.NewLine+
-                        "This is not evidence of supported physical aircraft control.";
+                        "Physical flight control is disabled.";
                 }
                 catch(Exception ex)
                 {
@@ -267,42 +593,35 @@ namespace AeroHelm.GcsCloud
             };
             policyPage.Controls.Add(cloudR2Capabilities);
             var cloudR2Missions=new Button {
-                Text="Inspect virtual mission registry (read-only)",Width=350
+                Text="List Simulator Missions",Width=350
             };
             cloudR2Missions.Click+=async(s,e)=>{
                 cloudR2Missions.Enabled=false;
                 try
                 {
-                    capabilityReport.Text="Virtual mission registry (no commands):"+
+                    capabilityReport.Text="Simulator missions:"+
                         Environment.NewLine+
                         await Api("GET","api/v1/missions?limit=50");
                 }
                 catch(Exception ex)
                 {
-                    capabilityReport.Text="Virtual mission registry unavailable: "+Error(ex);
+                    capabilityReport.Text="Simulator missions unavailable: "+Error(ex);
                 }
                 finally { if(!IsDisposed)cloudR2Missions.Enabled=true; }
             };
             policyPage.Controls.Add(cloudR2Missions);
             policyPage.Controls.Add(new Label {
                 Width=680,Height=80,
-                Text="Only a physically present Pi operator may authorize permitted supervised calibration."+
-                     Environment.NewLine+
-                     "Cloud autonomous missions run in a separate simulator; real aircraft execution remains blocked."
+                Text="Cloud missions run in the simulator. Bench calibration requires approval on the aircraft’s Pi."
             });
 
             foreach(var panel in new[]{sim,maint,policyPage})
             {
-                var home=new Button {Text="CLOSE OPS",Width=300,Height=42};
+                var home=new Button {Text="Close",Width=300,Height=42};
                 home.Click+=(s,e)=>Close();
                 panel.Controls.Add(home);
                 panel.Controls.SetChildIndex(home,0);
             }
-            BackColor=Drawing.Color.FromArgb(8,8,8);
-            ForeColor=Drawing.Color.White;
-            AutoScaleMode=AutoScaleMode.Dpi;
-            KeyPreview=true;
-            KeyDown+=(s,e)=>{if(e.KeyCode==Keys.Escape){Close();e.Handled=true;}};
             ApplyDarkTheme(this);
             VihangaAdaptivePanel.Attach(this,sim,maint,policyPage);
         }
@@ -489,7 +808,7 @@ namespace AeroHelm.GcsCloud
         private string RequestWithLease(string action,string id,string lease)
         {
             if(string.IsNullOrWhiteSpace(lease))
-                throw new InvalidOperationException("Acquire simulation control lease first.");
+                throw new InvalidOperationException("Request Simulator Control first.");
             if(string.IsNullOrWhiteSpace(Program.AeroHelmOperatorToken) ||
                DateTime.UtcNow>=Program.AeroHelmTokenExpiresUtc)
                 throw new InvalidOperationException("Cloud session expired.");

@@ -20,7 +20,10 @@ import time
 import uuid
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -42,7 +45,7 @@ CLAIM_SECONDS = 10
 ACCEPT_SECONDS = 30
 MAX_VEHICLES_PER_TENANT = 128
 MAX_MISSIONS_PER_TENANT = 2048
-EXPECTED_MIGRATION = "0002_cloud_compute"
+EXPECTED_MIGRATION = "0003_fleet_assignment"
 
 
 class VehicleCreate(BaseModel):
@@ -50,6 +53,11 @@ class VehicleCreate(BaseModel):
     vehicle_id: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     kind: Literal["virtual", "hardware"]
     profile: VehicleProfile
+
+
+class PilotAssignment(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    pilot_subject: str | None = Field(min_length=1, max_length=128)
 
 
 class LeaseRequest(BaseModel):
@@ -91,6 +99,7 @@ class TelemetryObservation(BaseModel):
     armed: bool
     mode: str = Field(min_length=1, max_length=32)
     link_rtt_ms: float | None = Field(default=None, ge=0, le=60000)
+    access_network: Literal["wifi", "ethernet", "cellular", "other"] | None = None
     gps_fix_type: int | None = Field(default=None, ge=0, le=6)
     # Only the existing Pi UART owner may report physical attitude samples.
     # Each observation is device-reported; the cloud cannot prove FC CRC.
@@ -148,6 +157,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="AeroHelm Cloud Fleet Control Plane",
                   version="1.0.0-rc1", lifespan=lifespan)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, error: RequestValidationError):
+        try:
+            return await request_validation_exception_handler(request, error)
+        except ValueError:
+            # Malformed numbers can appear in the rejected input echoed by Pydantic.
+            details = [
+                {"loc": item["loc"], "msg": item["msg"], "type": item["type"]}
+                for item in error.errors()
+            ]
+            return JSONResponse(status_code=422, content={"detail": details})
+
     if cfg.mode == "production":
         raw_hosts = os.getenv("AEROHELM_ALLOWED_HOSTS", "")
         hosts = [value.strip().lower() for value in raw_hosts.split(",") if value.strip()]
@@ -369,8 +391,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"vehicles": [
             {"vehicle_id": v.name, "kind": v.kind, "profile": v.profile,
              "active_mission": v.active_mission,
+             "assigned_pilot": v.assigned_pilot,
              "physical_control_enabled": False} for v in rows
         ]}
+
+    @app.put("/api/v1/vehicles/{vehicle_id}/assignment")
+    def assign_pilot(vehicle_id: str, body: PilotAssignment,
+                     p: Principal = Depends(identity), db: Session = Depends(database)):
+        p.require("fleet:admin")
+        with db.begin():
+            vehicle = scoped_vehicle(db, p.tenant, vehicle_id, lock=True)
+            if vehicle.assigned_pilot != body.pilot_subject:
+                vehicle.assigned_pilot = body.pilot_subject
+                emit(db, p.tenant, "vehicle.assignment.updated", vehicle.id, p.subject)
+        return {"vehicle_id": vehicle_id, "assigned_pilot": body.pilot_subject}
+
+    @app.get("/api/v1/vehicles/{vehicle_id}/mission-history")
+    def vehicle_mission_history(vehicle_id: str, limit: int = 50, offset: int = 0,
+                                p: Principal = Depends(identity),
+                                db: Session = Depends(database)):
+        p.require("fleet:read")
+        if not 1 <= limit <= 100 or not 0 <= offset <= MAX_MISSIONS_PER_TENANT:
+            raise HTTPException(422, "Invalid bounded mission page")
+        vehicle = scoped_vehicle(db, p.tenant, vehicle_id)
+        assignment = select(Job.id).where(
+            Job.vehicle_id == vehicle.id, Job.tenant == p.tenant,
+            Job.mission_id == Mission.id).exists()
+        missions = db.scalars(select(Mission).where(
+            Mission.tenant == p.tenant, assignment).order_by(
+            Mission.created_at.desc(), Mission.id.desc()).limit(limit).offset(offset))
+        return {"vehicle_id": vehicle.name, "limit": limit, "offset": offset,
+                "execution_target": "VIRTUAL_SIMULATOR_ONLY", "missions": [
+                    {"id": item.id, "status": item.status,
+                     "created_at": item.created_at, "updated_at": item.updated_at}
+                    for item in missions]}
 
     @app.post("/api/v1/device/telemetry/session")
     def open_telemetry_session(p: Principal = Depends(identity),
@@ -423,7 +477,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return {"vehicle_id": vehicle.name, "fresh": False,
                     "attitude": {"fresh": False, "roll_deg": None, "pitch_deg": None,
                                  "source": "DEVICE_REPORTED_UNVERIFIED"},
-                    "age_s": None, "session_epoch": state.epoch if state else None,
+                    "access_network": None, "age_s": None, "session_epoch": state.epoch if state else None,
                     "observation": None, "advisory_risks": ["TELEMETRY_UNAVAILABLE"],
                     "observation_source": ("VIRTUAL_SIMULATED" if vehicle.kind == "virtual"
                                            else "DEVICE_REPORTED_UNVERIFIED"),
@@ -455,6 +509,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "source": ("VIRTUAL_SIMULATED" if vehicle.kind == "virtual"
                                else "DEVICE_REPORTED_UNVERIFIED"),
                 },
+                "access_network": observation.get("access_network") if fresh else None,
                 "age_s": round(age, 3), "session_epoch": state.epoch,
                 "last_sequence": state.sequence, "observation": state.observation,
                 "advisory_risks": sorted(risks),
@@ -477,6 +532,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"tenant": p.tenant, "vehicles": [{
             "vehicle_id": vehicle.name, "kind": vehicle.kind,
             "active_virtual_mission": vehicle.active_mission,
+            "assigned_pilot": vehicle.assigned_pilot,
             "telemetry": read_telemetry(db, vehicle),
             "physical_control_enabled": False,
         } for vehicle in vehicles], "cloud_flight_authorized": False}

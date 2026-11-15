@@ -20,12 +20,13 @@ namespace AeroHelm.GcsCloud
 {
     public sealed class AeroHelmCloudPlugin : MissionPlanner.Plugin.Plugin
     {
-        private ToolStripButton _vision;
         private ToolStripButton _paths;
+        private ToolStripDropDownButton _operations;
         private ToolStripDropDownButton _workspaces;
+        private ToolStripMenuItem _planSurvey;
+        private readonly Dictionary<ToolStripItem, bool> _nativeAvailability =
+            new Dictionary<ToolStripItem, bool>();
         internal static AeroHelmReceiveOnlyBridge ActiveNativeBridge;
-        private bool _simulationWasVisible;
-        private bool _helpWasVisible;
         private readonly System.Windows.Forms.Timer _cloudLinkWatchdog =
             new System.Windows.Forms.Timer();
         private bool _cloudProbeBusy;
@@ -38,21 +39,13 @@ namespace AeroHelm.GcsCloud
 
         public override bool Loaded()
         {
-            // Mission Planner uses an icon-oriented MenuStrip with the COM selectors
-            // and ArduPilot logo aligned to the right. Appending a ToolStripMenuItem
-            // after those items can leave it hidden in the overflow area.
-            // Place a distinct, text-only button immediately after HELP instead.
             var main = MainV2.instance;
             var menu = main.MainMenu;
-            // Keep the native DATA / PLAN / SETUP / CONFIG entries.
-            // Three Vihanga entries only: link selection, camera, utilities.
-            // No duplicate CLOUD registry login or separate STATUS and HUD tiles.
-            int configIndex = menu.Items.IndexOf(main.MenuConfigTune);
-            int at = configIndex >= 0 ? configIndex + 1 :
-                Math.Max(0, menu.Items.IndexOf(main.MenuHelp));
+            int plannerIndex = menu.Items.IndexOf(main.MenuFlightPlanner);
+            int at = plannerIndex >= 0 ? plannerIndex + 1 : 0;
 
-            _paths = NewToolbarButton("PATHS",
-                "Select cloud telemetry or an independent USB/radio link");
+            _paths = NewToolbarButton("Connections", "PATHS",
+                "Choose private cloud telemetry or the direct USB/radio link");
             _paths.Click += delegate
             {
                 using (var picker = new AeroHelmLinkSelector())
@@ -63,94 +56,84 @@ namespace AeroHelm.GcsCloud
             };
             menu.Items.Insert(at++, _paths);
 
-            _vision = NewToolbarButton("CAMERA", "Open onboard camera viewer");
-            _vision.Click += delegate
+            _operations = NewToolbarMenu("Operations", "OPS",
+                "Flight records, aircraft status, fleet and cameras");
+            _operations.DropDownItems.Add("Flight records and status", null,
+                (sender, e) => ShowWorkspace(new AeroHelmOpsWindow()));
+            _operations.DropDownItems.Add("Fleet", null, (sender, e) =>
             {
-                using (var window = new AeroHelmVisionWindow())
-                    window.ShowDialog(main);
-            };
-            menu.Items.Insert(at++, _vision);
+                if (VihangaLinkLoginWindow.EnsureSignedIn(main))
+                    ShowWorkspace(new AeroHelmReadOnlyPage("FLEET"));
+            });
+            _operations.DropDownItems.Add("Cameras", null,
+                (sender, e) => ShowWorkspace(new AeroHelmVisionWindow()));
+            menu.Items.Insert(at++, _operations);
 
-            _workspaces = new ToolStripDropDownButton("TOOLS")
-            {
-                Name = "VihangaToolsButton",
-                ToolTipText = "Diagnostics, survey, simulated operations and settings",
-                Image = AeroHelmIconPainter.Make("SETTINGS",20),
-                ImageScaling = ToolStripItemImageScaling.None,
-                DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
-                ForeColor = FrameworkDrawing::System.Drawing.Color.White,
-                Margin = new Padding(4,0,4,0),
-                AutoSize = true
-            };
+            _planSurvey = new ToolStripMenuItem("Survey and corridor planning");
+            _planSurvey.Click += (sender, e) => ShowWorkspace(new AeroHelmSurveyWindow());
+            Host.FPMenuMap.Items.Add(_planSurvey);
+
+            _workspaces = NewToolbarMenu("Tools", "SETTINGS",
+                "Planning tools, diagnostics and settings");
+            _workspaces.DropDownItems.Add("Survey and corridor planning", null,
+                (sender, e) => ShowWorkspace(new AeroHelmSurveyWindow()));
             _workspaces.DropDownItems.Add("Link diagnostics", null,
-                (sender,e) => ShowWorkspace(new AeroHelmLinkWindow()));
-            _workspaces.DropDownItems.Add("Survey planner", null,
-                (sender,e) => ShowWorkspace(new AeroHelmSurveyWindow()));
-            var planPreview = new ToolStripMenuItem("Autonomy preview");
-            planPreview.Visible = VihangaLinkSession.UsesDedicatedRelay;
-            planPreview.Click += (sender,e) =>
-            {
-                if (VihangaLinkLoginWindow.EnsureSignedIn(MainV2.instance))
-                    ShowWorkspace(new VihangaMissionPreviewWindow());
-            };
-            _workspaces.DropDownItems.Add(planPreview);
+                (sender, e) => ShowWorkspace(new AeroHelmLinkWindow()));
             _workspaces.DropDownItems.Add("Vihanga settings", null,
-                (sender,e) => ShowWorkspace(new VihangaSettingsWindow()));
+                (sender, e) => ShowWorkspace(new VihangaSettingsWindow()));
 
-            // Experimental backend-dependent pages remain compiled for
-            // engineering evaluation but must not occupy the pilot's menu.
-            // Enable only in a dedicated development/maintenance session.
+            bool reducedToolbar = !string.Equals(Environment.GetEnvironmentVariable(
+                "AEROHELM_REDUCED_TOOLBAR"), "0", StringComparison.Ordinal);
+            if (reducedToolbar)
+            {
+                foreach (var item in new[] { main.MenuInitConfig, main.MenuConfigTune,
+                                             main.MenuSimulation, main.MenuHelp })
+                {
+                    _nativeAvailability.Add(item, item.Available);
+                    item.Available = false;
+                }
+                var maintenance = new ToolStripMenuItem("Mission Planner maintenance")
+                {
+                    CheckOnClick = true,
+                    ToolTipText = "Show Mission Planner setup, configuration, simulation and help"
+                };
+                maintenance.CheckedChanged += (sender, e) =>
+                {
+                    foreach (var entry in _nativeAvailability)
+                        entry.Key.Available = maintenance.Checked && entry.Value;
+                };
+                _workspaces.DropDownItems.Add(maintenance);
+            }
+
             if (string.Equals(Environment.GetEnvironmentVariable(
                     "VIHANGA_ADVANCED_TOOLS"), "1", StringComparison.Ordinal))
             {
                 _workspaces.DropDownItems.Add(new ToolStripSeparator());
-                // The separate attitude canvas is an engineering diagnostic,
-                // not the pilot's primary HUD. The real native DATA/Quick
-                // workspace is driven only by verified FC MAVLink telemetry.
+                var planPreview = new ToolStripMenuItem("Simulator mission preview");
+                planPreview.Visible = VihangaLinkSession.UsesDedicatedRelay;
+                planPreview.Click += (sender, e) =>
+                {
+                    if (VihangaLinkLoginWindow.EnsureSignedIn(main))
+                        ShowWorkspace(new VihangaMissionPreviewWindow());
+                };
+                _workspaces.DropDownItems.Add(planPreview);
                 _workspaces.DropDownItems.Add("Attitude monitor", null,
-                    (sender,e) =>
+                    (sender, e) =>
                     {
-                        if (VihangaLinkLoginWindow.EnsureSignedIn(MainV2.instance))
+                        if (VihangaLinkLoginWindow.EnsureSignedIn(main))
                             ShowWorkspace(new AeroHelmCloudAttitudeWindow());
                     });
-                _workspaces.DropDownItems.Add("Simulated operations (development)", null,
-                    (sender,e) => ShowWorkspace(new AeroHelmOpsWindow()));
-                _workspaces.DropDownItems.Add("Fleet intelligence (development)", null,
-                    (sender,e) => ShowWorkspace(new AeroHelmIntelWindow()));
+                _workspaces.DropDownItems.Add("Operations tools", null,
+                    (sender, e) => ShowWorkspace(new AeroHelmOpsWindow(true)));
+                _workspaces.DropDownItems.Add("Fleet diagnostics", null,
+                    (sender, e) => ShowWorkspace(new AeroHelmIntelWindow()));
             }
-            menu.Items.Insert(at++, _workspaces);
-            // This monitor stays active while the native Flight Data workspace is in use and the
-            // pilot opens native Flight Data. It NEVER connects to a radio,
-            // sends MAVLink or initiates failover. Its only output is a
-            // persistent, nonmodal LINK/PATHS warning to the operator.
-            _cloudLinkWatchdog.Interval=5000;
-            _cloudLinkWatchdog.Tick+=async(sender,args)=>await CheckCloudLinkAsync();
+            menu.Items.Insert(at, _workspaces);
+
+            _cloudLinkWatchdog.Interval = 5000;
+            _cloudLinkWatchdog.Tick += async (sender, args) => await CheckCloudLinkAsync();
             _cloudLinkWatchdog.Start();
             _ = CheckCloudLinkAsync();
-            _simulationWasVisible = main.MenuSimulation.Visible;
-            _helpWasVisible = main.MenuHelp.Visible;
-            if (!string.Equals(Environment.GetEnvironmentVariable(
-                    "AEROHELM_REDUCED_TOOLBAR"), "0", StringComparison.Ordinal))
-            {
-                main.MenuSimulation.Visible = false;
-                main.MenuHelp.Visible = false;
-            }
-
-            // AeroHelm operational profile: simplify the toolbar only.
-            // Do not delete Simulation or Help functionality, which upstream
-            // may still need for diagnosis, SITL and maintenance.
-            _simulationWasVisible = main.MenuSimulation.Visible;
-            _helpWasVisible = main.MenuHelp.Visible;
-            // AeroHelm GCS hides the upstream HELP and SIMULATION tiles in its
-            // default operator profile, as requested. They remain present in
-            // the native offline maintenance/recovery executable, not deleted.
-            // Only an explicit maintenance override may restore their buttons.
-            if (!string.Equals(Environment.GetEnvironmentVariable(
-                    "AEROHELM_REDUCED_TOOLBAR"), "0", StringComparison.Ordinal))
-            {
-                main.MenuSimulation.Visible = false;
-                main.MenuHelp.Visible = false;
-            }
             // The native loopback bridge consumes the already authenticated
             // in-memory startup session: one cloud login, no Python terminal.
             // Never run both the native and legacy Python bridges on port 5760.
@@ -178,7 +161,6 @@ namespace AeroHelm.GcsCloud
                     var active = ActiveNativeBridge;
                     bool hbLive = active != null && active.NativeHeartbeatFresh;
                     bool attLive = active != null && active.NativeAttitudeFresh;
-                    _paths.Text = "PATHS";
                     _paths.ForeColor = hbLive && attLive ?
                         FrameworkDrawing::System.Drawing.Color.FromArgb(195,228,195) :
                         FrameworkDrawing::System.Drawing.Color.FromArgb(242,198,139);
@@ -194,8 +176,7 @@ namespace AeroHelm.GcsCloud
                 if(string.IsNullOrWhiteSpace(Program.AeroHelmOperatorToken) ||
                    DateTime.UtcNow >= Program.AeroHelmTokenExpiresUtc)
                 {
-                    _paths.Text = "PATHS";
-                    _paths.ToolTipText = "CLOUD NOT AUTHENTICATED — pilot direct COM/radio remains independent";
+                    _paths.ToolTipText = "Cloud sign-in required. The direct USB/radio link is available independently.";
                     _paths.ForeColor = FrameworkDrawing::System.Drawing.Color.FromArgb(
                         242,198,139);
                     return;
@@ -216,7 +197,6 @@ namespace AeroHelm.GcsCloud
                                 && att is bool;
                 bool ready = link && hbKnown && (bool)hb &&
                              attKnown && (bool)att;
-                _paths.Text = "PATHS";
                 _paths.ForeColor = ready ?
                     FrameworkDrawing::System.Drawing.Color.FromArgb(195,228,195) :
                     FrameworkDrawing::System.Drawing.Color.FromArgb(242,198,139);
@@ -232,7 +212,6 @@ namespace AeroHelm.GcsCloud
             {
                 if(_paths != null && !_paths.IsDisposed)
                 {
-                    _paths.Text="PATHS";
                     _paths.ForeColor=FrameworkDrawing::System.Drawing.Color.FromArgb(
                         244,177,150);
                     _paths.ToolTipText="Cloud status unavailable; direct connection remains independent.";
@@ -247,13 +226,13 @@ namespace AeroHelm.GcsCloud
                 window.ShowDialog(MainV2.instance);
         }
 
-        private static ToolStripButton NewToolbarButton(string label, string tip)
+        private static ToolStripButton NewToolbarButton(string label, string icon, string tip)
         {
             return new ToolStripButton(label)
             {
                 Name = "AeroHelm" + label + "Button",
                 ToolTipText = tip,
-                Image = AeroHelmIconPainter.Make(label,20),
+                Image = AeroHelmIconPainter.Make(icon,20),
                 ImageScaling = ToolStripItemImageScaling.None,
                 DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
                 ForeColor = FrameworkDrawing::System.Drawing.Color.White,
@@ -262,22 +241,19 @@ namespace AeroHelm.GcsCloud
             };
         }
 
-        private static FrameworkDrawing::System.Drawing.Bitmap CameraIcon()
+        private static ToolStripDropDownButton NewToolbarMenu(string label, string icon, string tip)
         {
-            // Render vector camera artwork at runtime: no third-party icons/fonts.
-            var img = new FrameworkDrawing::System.Drawing.Bitmap(20, 20);
-            using (var g = FrameworkDrawing::System.Drawing.Graphics.FromImage(img))
-            using (var pen = new FrameworkDrawing::System.Drawing.Pen(
-                FrameworkDrawing::System.Drawing.Color.White, 1.6f))
+            return new ToolStripDropDownButton(label)
             {
-                g.SmoothingMode = FrameworkDrawing::System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                g.DrawRectangle(pen, 2, 6, 16, 11);
-                g.DrawEllipse(pen, 7, 9, 6, 6);
-                g.DrawLine(pen, 5, 6, 7, 3);
-                g.DrawLine(pen, 7, 3, 12, 3);
-                g.DrawLine(pen, 12, 3, 14, 6);
-            }
-            return img;
+                Name = "Vihanga" + label + "Button",
+                ToolTipText = tip,
+                Image = AeroHelmIconPainter.Make(icon,20),
+                ImageScaling = ToolStripItemImageScaling.None,
+                DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
+                ForeColor = FrameworkDrawing::System.Drawing.Color.White,
+                Margin = new Padding(4, 0, 4, 0),
+                AutoSize = true
+            };
         }
 
         public override bool Exit()
@@ -292,12 +268,15 @@ namespace AeroHelm.GcsCloud
             var main = MainV2.instance;
             if (main != null && !main.IsDisposed)
             {
-                main.MenuSimulation.Visible = _simulationWasVisible;
-                main.MenuHelp.Visible = _helpWasVisible;
-                foreach (var item in new ToolStripItem[] { _paths, _vision, _workspaces })
+                foreach (var entry in _nativeAvailability)
+                    entry.Key.Available = entry.Value;
+                foreach (var item in new ToolStripItem[] { _paths, _operations, _workspaces })
                     if (item != null) main.MainMenu.Items.Remove(item);
             }
-            foreach (ToolStripItem item in new ToolStripItem[] { _paths, _vision, _workspaces })
+            _nativeAvailability.Clear();
+            _planSurvey?.Dispose();
+            _planSurvey = null;
+            foreach (ToolStripItem item in new ToolStripItem[] { _paths, _operations, _workspaces })
             {
                 if (item == null) continue;
                 if (item.Image != null)
@@ -309,7 +288,7 @@ namespace AeroHelm.GcsCloud
                 item.Dispose();
             }
             _paths = null;
-            _vision = null;
+            _operations = null;
             _workspaces = null;
             return true;
         }

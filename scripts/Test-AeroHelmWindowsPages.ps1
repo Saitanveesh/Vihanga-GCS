@@ -153,25 +153,28 @@ $moduleAudit = Read-Source 'scripts/Audit-AeroHelmModules.ps1'
 $generatedCleanup = Read-Source 'scripts/Cleanup-AeroHelmGenerated.ps1'
 $legacyNativeLauncher = Read-Source 'scripts/Start-AeroHelm-NativeCloud.ps1'
 
-foreach ($item in @('PATHS','CAMERA')) {
-    Require-Text $cloud ('NewToolbarButton("'+$item+'"') "Required operator toolbar entry missing: $item"
+Require-Text $cloud 'NewToolbarButton("Connections"' 'Connection selector missing from operator toolbar.'
+foreach ($menu in @('Operations','Tools')) {
+    Require-Text $cloud ('NewToolbarMenu("'+$menu+'"') "Operator menu missing: $menu"
 }
-Require-Text $cloud 'new ToolStripDropDownButton("TOOLS")' 'Consolidated utility menu missing.'
-foreach ($item in @('Link diagnostics','Attitude monitor','Survey planner','Vihanga settings')) {
-    Require-Text $cloud ('DropDownItems.Add("'+$item+'"') "Consolidated tool missing: $item"
+foreach ($item in @('Flight records and status','Fleet','Cameras','Link diagnostics',
+    'Attitude monitor','Survey and corridor planning','Vihanga settings','Operations tools',
+    'Fleet diagnostics')) {
+    Require-Text $cloud ('DropDownItems.Add("'+$item+'"') "Consolidated entry missing: $item"
 }
 foreach ($obsolete in @('new ToolStripButton("CLOUD")',
+    'NewToolbarButton("PATHS"','NewToolbarButton("CAMERA"',
     'NewToolbarButton("SURVEY"','NewToolbarButton("VISION"',
     'NewToolbarButton("LINK"','NewToolbarButton("OPS"',
-    'NewToolbarButton("INTEL"','new ToolStripDropDownButton("MORE")',
-    'menu.Items.Insert(menu.Items.IndexOf(_paths)+1,_hudEvidence)')) {
+    'NewToolbarButton("INTEL"','new ToolStripDropDownButton("MORE")')) {
     if ($cloud.Contains($obsolete)) { throw "Obsolete operator toolbar item remains: $obsolete" }
 }
-Require-Text $cloud 'new VihangaSettingsWindow()' 'Settings must remain accessible through tools.'
-Require-Text $cloud 'main.MenuConfigTune' 'Custom controls must follow native Configuration entry.'
+Require-Text $cloud 'new VihangaSettingsWindow()' 'Settings must remain accessible through Tools.'
+Require-Text $cloud 'menu.Items.IndexOf(main.MenuFlightPlanner)' 'Operator controls must follow native Plan.'
+Require-Text $cloud 'Host.FPMenuMap.Items.Add(_planSurvey)' 'Survey and corridor planning must be accessible from the native Plan map.'
 Require-Text $cloud 'VIHANGA_ADVANCED_TOOLS' 'Experimental tools must be hidden unless maintenance profile is explicit.'
-Require-Text $cloud 'Simulated operations (development)' 'Simulation research must remain available in maintenance mode.'
-Require-Text $cloud 'Fleet intelligence (development)' 'Fleet lab must remain available in maintenance mode.'
+Require-Text $cloud 'new AeroHelmOpsWindow(true)' 'Advanced Operations tools must remain accessible.'
+Require-Text $cloud 'new AeroHelmReadOnlyPage("FLEET")' 'Operations must open the fleet table.'
 if ($cloud.Contains('internal sealed class CloudWindow : Form')) {
     throw 'Unreachable legacy CLOUD registry must not ship in the operator plugin.'
 }
@@ -201,7 +204,7 @@ Require-Text $workspace 'ProbeDuplexAsync("ping")' 'LINK must expose authenticat
 Require-Text $workspace 'ProbeDuplexAsync("uplink_status")' 'LINK must expose bounded Pi uplink counters.'
 Require-Text $workspace 'RequireAuthenticatedOrigin()' 'Duplex must never forward a JWT to arbitrary LINK origin.'
 Require-Text $workspace 'api/v1/network/requests' 'Duplex requires authenticated request/ack contracts.'
-Require-Text $workspace 'Flight commands remain blocked.' 'Diagnostic path must not claim aircraft control.'
+Require-Text $workspace 'Disarmed telemetry requests only; flight commands disabled' 'Diagnostic path must not claim aircraft control.'
 
 Require-Text $latestLauncher 'merge --ff-only' 'Latest GCS updater must not force-reset tracked code.'
 Require-Text $latestLauncher 'StopVerifiedLegacyBridge' 'Port recovery must require explicit verified-bridge opt-in.'
@@ -312,7 +315,6 @@ $operationCatch = $refresh.IndexOf('catch(InvalidOperationException)')
 if($httpCatch -lt 0 -or $operationCatch -lt 0 -or $httpCatch -gt $operationCatch) {
     throw 'PATHS diagnostics must catch WebException before InvalidOperationException.'
 }
-Require-Text $cloud 'NewToolbarButton("PATHS"' 'The independent connection module must be visible in toolbar.'
 Require-Text $project 'AeroHelmLinkSelector.cs' 'PATHS source must be compiled into plugin.'
 Require-Text $project 'AeroHelmCloudAttitudeWindow.cs' 'Real-only cloud attitude viewer must compile into plugin.'
 Require-Text $project 'VihangaLinkSession.cs' 'Dedicated private relay session must compile into native plugin.'
@@ -349,7 +351,7 @@ Require-Text $privatePi 'valid_uart_owner_probe' 'Pi agent must refuse a second 
 Require-Text $privatePi 'is_disarmed_autopilot_heartbeat' 'Local stream negotiation requires an identified disarmed autopilot.'
 Require-Text $privatePi 'request_parameter_snapshot_once' 'Read-only parameter inventory must require an explicit disarmed local request.'
 Require-Text $relaySession 'RequestDisarmedTelemetry' 'Private relay telemetry request must have a signed-in client.'
-Require-Text $workspace 'Request real FC streams' 'LINK must request missing flight-data streams without duplicating HUD.'
+Require-Text $workspace 'Request Telemetry' 'LINK must request missing flight-data streams without duplicating HUD.'
 Require-Text $workspace 'RequestDisarmedTelemetry(vehicleId)' 'LINK must use authenticated fixed telemetry-request API.'
 Require-Text $privateRelay 'allow_disarmed_telemetry_requests' 'Telemetry duplex must be explicitly opted in on relay.'
 Require-Text $privateRelay '@app.post("/api/v1/vehicles/{vehicle_id}/telemetry/probe")' 'Fixed telemetry-request endpoint missing.'
@@ -437,9 +439,11 @@ Require-Text $consolidation '& powershell.exe @buildArgs' 'Release build must us
 Require-Text $consolidation 'if($freshBootstrap)' 'Bootstrap must be guarded separately from transactional repairs.'
 Require-Text $consolidation '-SkipLegacySettings' 'Clean bootstrap must avoid restoring old Mission Planner settings.'
 Require-Text (Read-Source 'GCSViews/FlightData.cs') 'new ToolStripMenuItem("Switch tab")' 'Native Flight tabs must remain accessible in one row.'
-Require-Text $cloud 'AeroHelmIconPainter.Make(label,20)' 'AeroHelm toolbar needs per-module vector icons.'
-Require-Text $cloud 'main.MenuSimulation.Visible = false' 'Hide Simulation toolbar in default GCS profile.'
-Require-Text $cloud 'main.MenuHelp.Visible = false' 'Hide Help toolbar in default GCS profile.'
+Require-Text $cloud 'AeroHelmIconPainter.Make(icon,20)' 'AeroHelm toolbar needs per-module vector icons.'
+Require-Text $cloud 'main.MenuInitConfig, main.MenuConfigTune,' 'Group native Setup and Configuration under maintenance.'
+Require-Text $cloud 'main.MenuSimulation, main.MenuHelp' 'Group native Simulation and Help under maintenance.'
+Require-Text $cloud 'item.Available = false' 'Hide native maintenance buttons in the operator profile.'
+Require-Text $cloud 'entry.Key.Available = maintenance.Checked && entry.Value' 'Maintenance must restore original native button availability.'
 Require-Text $nativeBridge 'ws.ReceiveAsync' 'Cloud receiver must be authenticated and read only.'
 Require-Text $nativeBridge 'internal static Uri PrivateWebSocketUri()' 'MAVLink WSS URI must be shared between the native bridge and the attitude monitor.'
 if ($nativeBridge.Contains('ws.SendAsync') -or $nativeBridge.Contains('ws.Send(')) {
@@ -483,6 +487,8 @@ foreach ($route in @(
 )) {
     Require-Text $pages $route "Missing authenticated read-only backend contract: $route"
 }
+Require-Text $pages 'PrivateRelayFleetSnapshot(VihangaLinkSession.ReadRelayHealth())' 'Fleet must use the active private relay session.'
+Require-Text $relaySession 'new Uri(new Uri(origin + "/"), "api/v1/mavlink/health")' 'Private relay fleet must use the checked telemetry origin.'
 Require-Text $pages 'OperationsApi.Request("GET",route)' 'Page requests must use GET only.'
 Require-Text $pages 'case "discover": route = "api/v2/fleet"' 'Analytics must discover registered aircraft.'
 Require-Text $pages 'availableAircraft.Items.Count == 1' 'Auto-selection must require one unambiguous registered aircraft.'
@@ -498,10 +504,7 @@ Require-Text $workspace 'AEROHELM_VISION_AUTO_OPEN' 'VISION must open the saved 
 Require-Text $workspace 'AeroHelmWorkspaceSettings.CheckedPrivateUrl(url.Text)' 'Camera URL validation missing.'
 Require-Text $workspace 'refreshTimer.Interval = 15000' 'LINK bounded polling setting missing.'
 Require-Text $workspace 'refreshTimer.Stop()' 'LINK watcher must stop on close.'
-# Windows PowerShell 5.1 decodes BOM-less .ps1 files as ANSI. Construct the
-# Unicode em dash at runtime so this source test works on PS 5.1 and PS 7+.
-$opsPolicyTitle = 'CAPABILITIES ' + [char]0x2014 + ' READ ONLY'
-Require-Text $operations $opsPolicyTitle 'OPS policy page is missing.'
+Require-Text $operations 'Cloud Status' 'OPS policy page is missing.'
 Require-Text $operations 'Api("GET","api/v1/operations/capabilities")' 'OPS policy must be a read-only GET.'
 foreach ($excluded in @('obj3','Tools')) {
     Require-Text $mainProject ('<Compile Remove="'+$excluded+'\**" />') "Main GCS must exclude $excluded from SDK default compilation."
