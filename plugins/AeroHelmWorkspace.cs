@@ -72,6 +72,8 @@ namespace AeroHelm.GcsCloud
         private readonly NumericUpDown spacing = Number(5, 300, 30, 1);
         private readonly NumericUpDown altitude = Number(5, 120, 30, 1);
         private readonly NumericUpDown speed = Number(1, 15, 5, 1);
+        private readonly CheckBox corridor = new CheckBox { Text = "Corridor", AutoSize = true };
+        private readonly NumericUpDown corridorWidth = Number(5, 500, 50, 1);
         private readonly DataGridView grid = new DataGridView();
         private readonly Label status = new Label();
         private readonly Button export = new Button();
@@ -95,16 +97,18 @@ namespace AeroHelm.GcsCloud
             };
         }
 
-        private static void Add(FlowLayoutPanel panel, string name, Control control)
+        private static Label Add(FlowLayoutPanel panel, string name, Control control)
         {
-            panel.Controls.Add(new Label { Text = name, Width = 96,
-                TextAlign = Drawing.ContentAlignment.MiddleRight, Height = 25 });
+            var label = new Label { Text = name, Width = 96,
+                TextAlign = Drawing.ContentAlignment.MiddleRight, Height = 25 };
+            panel.Controls.Add(label);
             panel.Controls.Add(control);
+            return label;
         }
 
         public AeroHelmSurveyWindow()
         {
-            Text = "VIHANGA SURVEY — Offline autonomous mission draft";
+            Text = "Vihanga Survey";
             StartPosition = FormStartPosition.CenterParent;
             Width = 820;
             Height = 680;
@@ -116,14 +120,17 @@ namespace AeroHelm.GcsCloud
                 FlowDirection = FlowDirection.LeftToRight, WrapContents = true,
                 Padding = new Padding(8)
             };
-            Add(top, "North latitude", north);
-            Add(top, "South latitude", south);
-            Add(top, "West longitude", west);
-            Add(top, "East longitude", east);
-            Add(top, "Row spacing (m)", spacing);
+            top.Controls.Add(corridor);
+            var northLabel = Add(top, "North latitude", north);
+            var westLabel = Add(top, "West longitude", west);
+            var southLabel = Add(top, "South latitude", south);
+            var eastLabel = Add(top, "East longitude", east);
+            var widthLabel = Add(top, "Width (m)", corridorWidth);
+            corridorWidth.Enabled = widthLabel.Enabled = false;
+            Add(top, "Spacing (m)", spacing);
             Add(top, "Rel. altitude (m)", altitude);
             Add(top, "Speed (m/s)", speed);
-            var generate = new Button { Text = "Generate survey draft", Width = 175, Height = 30 };
+            var generate = new Button { Text = "Preview route", Width = 175, Height = 30 };
             export.Text = "Export .waypoints";
             export.Width = 145;
             export.Height = 30;
@@ -144,8 +151,7 @@ namespace AeroHelm.GcsCloud
             status.Dock = DockStyle.Bottom;
             status.Height = 88;
             status.Padding = new Padding(10);
-            status.Text = "OFFLINE ONLY: enter the site coordinates and generate a draft. No takeoff, RTL, landing, mission upload or cloud command is issued.\nReview home, terrain, airspace, geofence, obstacles, mission transitions and battery margins before any flight.";
-            status.ForeColor = Drawing.Color.DarkRed;
+            status.Text = "Enter the survey bounds or select Corridor to enter a centerline.";
 
             Controls.Add(grid);
             Controls.Add(status);
@@ -160,11 +166,20 @@ namespace AeroHelm.GcsCloud
                 draft = null;
                 export.Enabled = false;
                 grid.Rows.Clear();
-                status.Text = "Survey inputs changed. Regenerate and review the draft before export.\n" +
-                              "No commands or mission uploads are available from SURVEY.";
+                status.Text = "Inputs changed. Preview the route before export.";
             };
-            foreach (var input in new[] { north, south, east, west, spacing, altitude, speed })
+            foreach (var input in new[] { north, south, east, west, spacing, altitude, speed, corridorWidth })
                 input.ValueChanged += invalidate;
+            corridor.CheckedChanged += (sender, args) =>
+            {
+                bool enabled = corridor.Checked;
+                northLabel.Text = enabled ? "Start latitude" : "North latitude";
+                westLabel.Text = enabled ? "Start longitude" : "West longitude";
+                southLabel.Text = enabled ? "End latitude" : "South latitude";
+                eastLabel.Text = enabled ? "End longitude" : "East longitude";
+                corridorWidth.Enabled = widthLabel.Enabled = enabled;
+                invalidate(sender, args);
+            };
         }
 
         private void Generate()
@@ -174,7 +189,11 @@ namespace AeroHelm.GcsCloud
             grid.Rows.Clear();
             try
             {
-                draft = SurveyPlanner.Generate(new SurveyOptions
+                draft = corridor.Checked
+                    ? SurveyPlanner.GenerateCorridor((double)north.Value, (double)west.Value,
+                        (double)south.Value, (double)east.Value, (double)corridorWidth.Value,
+                        (double)spacing.Value, (double)altitude.Value, (double)speed.Value)
+                    : SurveyPlanner.Generate(new SurveyOptions
                 {
                     North = (double)north.Value, South = (double)south.Value,
                     West = (double)west.Value, East = (double)east.Value,
@@ -188,8 +207,8 @@ namespace AeroHelm.GcsCloud
                                   point.Longitude.ToString("F7", CultureInfo.InvariantCulture),
                                   point.RelativeAltitudeMetres.ToString("F1", CultureInfo.InvariantCulture));
                 status.Text = string.Format(CultureInfo.InvariantCulture,
-                    "DRAFT READY — {0} waypoints, {1:F1} km route, nominal travel {2:F1} min (no takeoff/landing time).\n" +
-                    "NOT UPLOADED. Mission Planner will overwrite placeholder home (row 0). Verify GPS, RTL, obstacles, airspace, terrain and battery before use.",
+                    "{0} waypoints, {1:F1} km, estimated travel {2:F1} min.\n" +
+                    "Review the route in Mission Planner and verify the home position and terrain.",
                     draft.Points.Count, draft.HorizontalDistanceMetres / 1000.0,
                     draft.NominalTravelSeconds / 60.0);
                 export.Enabled = true;
@@ -205,9 +224,9 @@ namespace AeroHelm.GcsCloud
             if (draft == null) return;
             using (var dialog = new SaveFileDialog
             {
-                Title = "Export OFFLINE waypoint draft (never uploaded)",
+                Title = "Export waypoint draft",
                 Filter = "Mission Planner waypoints (*.waypoints)|*.waypoints|Text (*.txt)|*.txt",
-                FileName = "aerohelm-survey-DRAFT.waypoints"
+                FileName = corridor.Checked ? "vihanga-corridor.waypoints" : "vihanga-survey.waypoints"
             })
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
@@ -215,9 +234,9 @@ namespace AeroHelm.GcsCloud
                 {
                     SurveyPlanner.SaveDraft(draft, dialog.FileName);
                     status.Text = "Exported draft to: " + dialog.FileName +
-                        "\nReview it in Mission Planner Flight Plan -> Load WP File. This tool does NOT upload, arm or start a mission.";
+                        "\nReview it in Mission Planner Flight Plan under Load WP File.";
                 }
-                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException)
                 {
                     status.Text = "Export failed: " + ex.Message;
                 }
