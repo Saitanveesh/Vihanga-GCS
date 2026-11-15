@@ -1,6 +1,7 @@
 """Hardware-free end-to-end Cloud Fleet Control Plane API regression tests."""
 from __future__ import annotations
 
+import json
 import time
 import uuid
 
@@ -303,11 +304,13 @@ def test_nonfinite_mission_inputs_fail_validation_not_server_error(client):
     make_two(client)
     bad = spec()
     bad["tasks"][0]["latitude"] = float("nan")
-    response = draft(client, plan=bad)
+    headers = {**jwt_header("author"), "Content-Type": "application/json"}
+    response = client.post("/api/v1/missions", headers=headers, content=json.dumps(bad))
     assert response.status_code == 422
     bad = spec()
     bad["tasks"][0]["required_energy_wh"] = float("inf")
-    assert draft(client, plan=bad).status_code == 422
+    response = client.post("/api/v1/missions", headers=headers, content=json.dumps(bad))
+    assert response.status_code == 422
 
 
 def test_fleet_assignment_is_tenant_scoped_and_requires_administrator(client):
