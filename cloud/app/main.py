@@ -20,7 +20,10 @@ import time
 import uuid
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -154,6 +157,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="AeroHelm Cloud Fleet Control Plane",
                   version="1.0.0-rc1", lifespan=lifespan)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, error: RequestValidationError):
+        try:
+            return await request_validation_exception_handler(request, error)
+        except ValueError:
+            # Malformed numbers can appear in the rejected input echoed by Pydantic.
+            details = [
+                {"loc": item["loc"], "msg": item["msg"], "type": item["type"]}
+                for item in error.errors()
+            ]
+            return JSONResponse(status_code=422, content={"detail": details})
+
     if cfg.mode == "production":
         raw_hosts = os.getenv("AEROHELM_ALLOWED_HOSTS", "")
         hosts = [value.strip().lower() for value in raw_hosts.split(",") if value.strip()]
